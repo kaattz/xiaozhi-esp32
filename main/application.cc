@@ -9,6 +9,7 @@
 #include "mcp_server.h"
 #include "assets.h"
 #include "settings.h"
+#include "wake_arbiter_client.h"
 
 #include <cstring>
 #include <esp_log.h>
@@ -511,6 +512,11 @@ void Application::InitializeProtocol() {
     
     protocol_->OnAudioChannelClosed([this, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+        xTaskCreate([](void*) {
+            WakeArbiterClient arbiter;
+            arbiter.EndSession();
+            vTaskDelete(NULL);
+        }, "session_end", 4096, nullptr, 1, nullptr);
         Schedule([this]() {
             auto display = Board::GetInstance().GetDisplay();
             display->SetChatMessage("system", "");
@@ -786,17 +792,9 @@ void Application::HandleWakeWordDetectedEvent() {
         audio_service_.EncodeWakeWord();
         auto wake_word = audio_service_.GetLastWakeWord();
 
-        if (!protocol_->IsAudioChannelOpened()) {
-            SetDeviceState(kDeviceStateConnecting);
-            // Schedule to let the state change be processed first (UI update),
-            // then continue with OpenAudioChannel which may block for ~1 second
-            Schedule([this, wake_word]() {
-                ContinueWakeWordInvoke(wake_word);
-            });
-            return;
-        }
-        // Channel already opened, continue directly
-        ContinueWakeWordInvoke(wake_word);
+        Schedule([this, wake_word]() {
+            ContinueWakeWordArbitration(wake_word);
+        });
     } else if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
         AbortSpeaking(kAbortReasonWakeWordDetected);
         // Clear send queue to avoid sending residues to server
@@ -817,6 +815,22 @@ void Application::HandleWakeWordDetectedEvent() {
         // Restart the activation check if the wake word is detected during activation
         SetDeviceState(kDeviceStateIdle);
     }
+}
+
+void Application::ContinueWakeWordArbitration(const std::string& wake_word) {
+    // Check state again in case it was changed during scheduling
+    if (GetDeviceState() != kDeviceStateIdle) {
+        return;
+    }
+
+    WakeArbiterClient arbiter;
+    if (!arbiter.RequestSession(wake_word)) {
+        audio_service_.EnableWakeWordDetection(true);
+        return;
+    }
+
+    SetDeviceState(kDeviceStateConnecting);
+    ContinueWakeWordInvoke(wake_word);
 }
 
 void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
