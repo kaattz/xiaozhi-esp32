@@ -140,6 +140,9 @@ private:
     bool aborted_ = false;
     bool assets_version_checked_ = false;
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
+    bool auto_firmware_upgrade_enabled_ = false;
+    bool wake_arbitration_enabled_ = false;
+    bool wake_arbitration_session_active_ = false;
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 
@@ -156,6 +159,7 @@ private:
     void ContinueOpenAudioChannel(ListeningMode mode);
     void ContinueWakeWordArbitration(const std::string& wake_word);
     void ContinueWakeWordInvoke(const std::string& wake_word);
+    void EndWakeArbitrationSession();
 
     // Activation task (runs in background)
     void ActivationTask();
@@ -163,6 +167,9 @@ private:
     // Helper methods
     void CheckAssetsVersion();
     void CheckNewVersion();
+    void LoadRuntimeSettings();
+    bool IsAutoFirmwareUpgradeEnabled() const;
+    bool IsWakeArbitrationEnabled() const;
     void InitializeProtocol();
     void ShowActivationCode(const std::string& code, const std::string& message);
     void SetListeningMode(ListeningMode mode);

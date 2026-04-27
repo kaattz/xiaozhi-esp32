@@ -135,6 +135,7 @@ void Application::Initialize() {
                 // WiFi config mode enter is handled by WifiBoard internally
                 break;
             case NetworkEvent::WifiConfigModeExit:
+                LoadRuntimeSettings();
                 // WiFi config mode exit is handled by WifiBoard internally
                 break;
             // Cellular modem specific events
@@ -158,6 +159,7 @@ void Application::Initialize() {
 
     // Start network asynchronously
     board.StartNetwork();
+    LoadRuntimeSettings();
 
     // Update the status bar immediately to show the network state
     display->UpdateStatusBar(true);
@@ -433,11 +435,13 @@ void Application::CheckNewVersion() {
         retry_count = 0;
         retry_delay = 10; // Reset retry delay
 
-        if (ota_->HasNewVersion()) {
+        if (ota_->HasNewVersion() && IsAutoFirmwareUpgradeEnabled()) {
             if (UpgradeFirmware(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion())) {
                 return; // This line will never be reached after reboot
             }
             // If upgrade failed, continue to normal operation
+        } else if (ota_->HasNewVersion()) {
+            ESP_LOGI(TAG, "New firmware version is available, but automatic firmware upgrade is disabled");
         }
 
         // No new version, mark the current version as valid
@@ -469,6 +473,22 @@ void Application::CheckNewVersion() {
             }
         }
     }
+}
+
+void Application::LoadRuntimeSettings() {
+    Settings settings("wifi", false);
+    auto_firmware_upgrade_enabled_ = settings.GetBool("auto_firmware_upgrade", false);
+    wake_arbitration_enabled_ = settings.GetBool("wake_arbitration_enabled", false);
+    ESP_LOGI(TAG, "Runtime settings: auto_firmware_upgrade=%d, wake_arbitration_enabled=%d",
+        auto_firmware_upgrade_enabled_, wake_arbitration_enabled_);
+}
+
+bool Application::IsAutoFirmwareUpgradeEnabled() const {
+    return auto_firmware_upgrade_enabled_;
+}
+
+bool Application::IsWakeArbitrationEnabled() const {
+    return wake_arbitration_enabled_;
 }
 
 void Application::InitializeProtocol() {
@@ -512,11 +532,7 @@ void Application::InitializeProtocol() {
     
     protocol_->OnAudioChannelClosed([this, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
-        xTaskCreate([](void*) {
-            WakeArbiterClient arbiter;
-            arbiter.EndSession();
-            vTaskDelete(NULL);
-        }, "session_end", 4096, nullptr, 1, nullptr);
+        EndWakeArbitrationSession();
         Schedule([this]() {
             auto display = Board::GetInstance().GetDisplay();
             display->SetChatMessage("system", "");
@@ -823,12 +839,21 @@ void Application::ContinueWakeWordArbitration(const std::string& wake_word) {
         return;
     }
 
+    if (!IsWakeArbitrationEnabled()) {
+        wake_arbitration_session_active_ = false;
+        SetDeviceState(kDeviceStateConnecting);
+        ContinueWakeWordInvoke(wake_word);
+        return;
+    }
+
     WakeArbiterClient arbiter;
     if (!arbiter.RequestSession(wake_word)) {
+        wake_arbitration_session_active_ = false;
         audio_service_.EnableWakeWordDetection(true);
         return;
     }
 
+    wake_arbitration_session_active_ = true;
     SetDeviceState(kDeviceStateConnecting);
     ContinueWakeWordInvoke(wake_word);
 }
@@ -841,6 +866,7 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
 
     if (!protocol_->IsAudioChannelOpened()) {
         if (!protocol_->OpenAudioChannel()) {
+            EndWakeArbitrationSession();
             audio_service_.EnableWakeWordDetection(true);
             return;
         }
@@ -861,6 +887,19 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
     play_popup_on_listening_ = true;
     SetListeningMode(GetDefaultListeningMode());
 #endif
+}
+
+void Application::EndWakeArbitrationSession() {
+    if (!wake_arbitration_session_active_) {
+        return;
+    }
+
+    wake_arbitration_session_active_ = false;
+    xTaskCreate([](void*) {
+        WakeArbiterClient arbiter;
+        arbiter.EndSession();
+        vTaskDelete(NULL);
+    }, "session_end", 4096, nullptr, 1, nullptr);
 }
 
 void Application::HandleStateChangedEvent() {

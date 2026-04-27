@@ -4,13 +4,14 @@
 
 #include <cJSON.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 
 #include <cstring>
 
 #define TAG "WakeArbiterClient"
 
 namespace {
-constexpr int kWakeArbitrationTimeoutSeconds = 2;
+constexpr int kWakeArbitrationTimeoutMs = 800;
 }
 
 WakeArbitrationDecision ParseWakeArbitrationDecision(const std::string& response_body) {
@@ -30,14 +31,22 @@ WakeArbitrationDecision ParseWakeArbitrationDecision(const std::string& response
 }
 
 bool WakeArbiterClient::RequestSession(const std::string& wake_word) {
+    auto start_time_us = esp_timer_get_time();
+    auto log_cost = [start_time_us]() {
+        auto cost_ms = (esp_timer_get_time() - start_time_us) / 1000;
+        ESP_LOGI(TAG, "Wake arbitration cost: %lld ms", static_cast<long long>(cost_ms));
+    };
+
     auto url = BuildEndpointUrl("/wake-detected");
     if (url.empty()) {
         ESP_LOGE(TAG, "Wake arbitration gateway URL is empty");
+        log_cost();
         return false;
     }
 
     auto network = Board::GetInstance().GetNetwork();
-    auto http = network->CreateHttp(kWakeArbitrationTimeoutSeconds);
+    auto http = network->CreateHttp(0);
+    http->SetTimeout(kWakeArbitrationTimeoutMs);
     http->SetHeader("Content-Type", "application/json");
     http->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
     http->SetHeader("Client-Id", Board::GetInstance().GetUuid());
@@ -45,12 +54,14 @@ bool WakeArbiterClient::RequestSession(const std::string& wake_word) {
 
     if (!http->Open("POST", url)) {
         ESP_LOGE(TAG, "Failed to open wake arbitration request: %s", url.c_str());
+        log_cost();
         return false;
     }
 
     auto status_code = http->GetStatusCode();
     auto response_body = http->ReadAll();
     http->Close();
+    log_cost();
 
     if (status_code != 200) {
         ESP_LOGE(TAG, "Wake arbitration failed, status=%d, body=%s", status_code, response_body.c_str());
@@ -75,7 +86,8 @@ bool WakeArbiterClient::EndSession() {
     }
 
     auto network = Board::GetInstance().GetNetwork();
-    auto http = network->CreateHttp(kWakeArbitrationTimeoutSeconds);
+    auto http = network->CreateHttp(0);
+    http->SetTimeout(kWakeArbitrationTimeoutMs);
     http->SetHeader("Content-Type", "application/json");
     http->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
     http->SetHeader("Client-Id", Board::GetInstance().GetUuid());
