@@ -36,6 +36,21 @@ v1 的稳定版本为 1.9.2，可以通过 `git checkout v1` 来切换到 v1 版
 - 通过云端 MCP 扩展大模型能力（智能家居控制、PC桌面操作、知识搜索、邮件收发等）
 - 自定义唤醒词、字体、表情与聊天背景，支持网页端在线修改 ([自定义Assets生成器](https://github.com/78/xiaozhi-assets-generator))
 
+### 本分支改动说明
+
+这个分支保留原来的小智官方云连接流程，只在唤醒进入会话前增加了 `xiaozhi-gateway` 仲裁。
+
+| 改动 | 作用 |
+|---|---|
+| 新增 `WakeArbiterClient` | 设备检测到唤醒词后，先向网关请求是否允许进入会话 |
+| 新增网关配置项 | 在 `menuconfig` 里配置 `WAKE_ARBITRATION_GATEWAY_URL`，默认 `http://gateway:8125` |
+| 唤醒前调用 `/wake-detected` | 网关允许时才继续原来的语音会话流程 |
+| 会话结束调用 `/session/end` | 音频通道关闭后通知网关释放当前活跃会话 |
+| 网关拒绝或不可用时不进入会话 | 不做本地猜测，重新开启唤醒检测，避免多个设备同时响应 |
+| 新增计划文档 | `docs/plans/2026-04-26-xiaozhi-gateway.md` 记录网关、HA MCP、ESP32 的整体改造方案 |
+
+使用这个分支时，需要同时部署 `xiaozhi-gateway`，并把设备的网关地址配置成内网可访问地址，例如 `http://NAS_IP:8125`。
+
 ## 硬件
 
 ### 面包板手工制作实践
