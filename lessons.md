@@ -1,1 +1,2 @@
 - 用户指出 Home Assistant 控制是通过 MCP 调用时，不能直接断言“官方云默认按 room 控制 HA 完全不行”。需要先区分：room 是否能通过设备端 MCP 工具描述、设备状态、工具参数或前置服务传入；HA 控制逻辑是在官方云内置能力里，还是设备/自建 MCP 工具里。
+- Home Assistant 的 `llm.LLMContext.context` 是 HA 核心 `Context` 对象，不能塞自定义字典；room 信息应通过 prompt、`device_id` 或工具参数传递，否则可能出现工具返回成功但实际服务调用不生效。
