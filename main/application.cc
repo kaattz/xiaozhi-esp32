@@ -20,6 +20,10 @@
 
 #define TAG "Application"
 
+namespace {
+constexpr const char* kAutoFirmwareUpgradeKey = "auto_fw_upg";
+constexpr const char* kWakeArbitrationEnabledKey = "wake_arb";
+}
 
 Application::Application() {
     event_group_ = xEventGroupCreate();
@@ -477,8 +481,8 @@ void Application::CheckNewVersion() {
 
 void Application::LoadRuntimeSettings() {
     Settings settings("wifi", false);
-    auto_firmware_upgrade_enabled_ = settings.GetBool("auto_firmware_upgrade", false);
-    wake_arbitration_enabled_ = settings.GetBool("wake_arbitration_enabled", false);
+    auto_firmware_upgrade_enabled_ = settings.GetBool(kAutoFirmwareUpgradeKey, false);
+    wake_arbitration_enabled_ = settings.GetBool(kWakeArbitrationEnabledKey, false);
     ESP_LOGI(TAG, "Runtime settings: auto_firmware_upgrade=%d, wake_arbitration_enabled=%d",
         auto_firmware_upgrade_enabled_, wake_arbitration_enabled_);
 }

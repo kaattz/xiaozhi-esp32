@@ -21,6 +21,11 @@
 
 #define TAG "WifiConfigurationAp"
 
+namespace {
+constexpr const char* kAutoFirmwareUpgradeKey = "auto_fw_upg";
+constexpr const char* kWakeArbitrationEnabledKey = "wake_arb";
+}
+
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
 
@@ -216,7 +221,7 @@ void WifiConfigurationAp::StartAccessPoint()
 
         // 读取自动固件升级设置
         uint8_t auto_firmware_upgrade = 0;
-        err = nvs_get_u8(nvs, "auto_firmware_upgrade", &auto_firmware_upgrade);
+        err = nvs_get_u8(nvs, kAutoFirmwareUpgradeKey, &auto_firmware_upgrade);
         if (err == ESP_OK) {
             auto_firmware_upgrade_ = auto_firmware_upgrade != 0;
         } else {
@@ -225,7 +230,7 @@ void WifiConfigurationAp::StartAccessPoint()
 
         // 读取唤醒仲裁设置
         uint8_t wake_arbitration_enabled = 0;
-        err = nvs_get_u8(nvs, "wake_arbitration_enabled", &wake_arbitration_enabled);
+        err = nvs_get_u8(nvs, kWakeArbitrationEnabledKey, &wake_arbitration_enabled);
         if (err == ESP_OK) {
             wake_arbitration_enabled_ = wake_arbitration_enabled != 0;
         } else {
@@ -667,7 +672,7 @@ void WifiConfigurationAp::StartWebServer()
             cJSON *auto_firmware_upgrade = cJSON_GetObjectItem(json, "auto_firmware_upgrade");
             if (cJSON_IsBool(auto_firmware_upgrade)) {
                 this_->auto_firmware_upgrade_ = cJSON_IsTrue(auto_firmware_upgrade);
-                err = nvs_set_u8(nvs, "auto_firmware_upgrade", this_->auto_firmware_upgrade_ ? 1 : 0);
+                err = nvs_set_u8(nvs, kAutoFirmwareUpgradeKey, this_->auto_firmware_upgrade_ ? 1 : 0);
                 if (err != ESP_OK) {
                     ESP_LOGE(TAG, "Failed to save auto_firmware_upgrade: %d", err);
                 }
@@ -677,7 +682,7 @@ void WifiConfigurationAp::StartWebServer()
             cJSON *wake_arbitration_enabled = cJSON_GetObjectItem(json, "wake_arbitration_enabled");
             if (cJSON_IsBool(wake_arbitration_enabled)) {
                 this_->wake_arbitration_enabled_ = cJSON_IsTrue(wake_arbitration_enabled);
-                err = nvs_set_u8(nvs, "wake_arbitration_enabled", this_->wake_arbitration_enabled_ ? 1 : 0);
+                err = nvs_set_u8(nvs, kWakeArbitrationEnabledKey, this_->wake_arbitration_enabled_ ? 1 : 0);
                 if (err != ESP_OK) {
                     ESP_LOGE(TAG, "Failed to save wake_arbitration_enabled: %d", err);
                 }

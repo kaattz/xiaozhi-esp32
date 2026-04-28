@@ -23,8 +23,10 @@ def test_advanced_config_persists_runtime_switches():
     assert "wake_arbitration_enabled_" in header
     assert '"auto_firmware_upgrade"' in source
     assert '"wake_arbitration_enabled"' in source
-    assert "nvs_set_u8(nvs, \"auto_firmware_upgrade\"" in source
-    assert "nvs_set_u8(nvs, \"wake_arbitration_enabled\"" in source
+    assert 'kAutoFirmwareUpgradeKey = "auto_fw_upg"' in source
+    assert 'kWakeArbitrationEnabledKey = "wake_arb"' in source
+    assert "nvs_set_u8(nvs, kAutoFirmwareUpgradeKey" in source
+    assert "nvs_set_u8(nvs, kWakeArbitrationEnabledKey" in source
 
 
 def test_application_uses_runtime_switches():

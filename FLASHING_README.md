@@ -1,6 +1,6 @@
 # xiaozhi-esp32 烧录说明
 
-本文档记录在 Windows PowerShell 下，把 `xiaozhi-esp32` 烧录到 ESP32-S3 太极小派开发板的流程。
+本文档记录在 Windows PowerShell 下，把 `xiaozhi-esp32` 烧录到 ESP32-S3 开发板的流程。默认以太极小派为例，ESP32-S3-BOX-3B 只需要按本文的差异配置修改板型和硬件选项。
 
 ## 1. 打开 PowerShell
 
@@ -74,7 +74,7 @@ Xiaozhi Assistant
 
 | 配置项 | 建议值 |
 |---|---|
-| Board Type | 太极小派 esp32s3 |
+| Board Type | 按实际硬件选择，见下面“硬件差异配置” |
 | Flash Assets | Flash Default Assets |
 | Default Language | Chinese |
 | Wake Word Implementation Type | Wakenet model with AFE |
@@ -84,12 +84,20 @@ Xiaozhi Assistant
 确认 Flash 大小：
 
 ```text
-Serial flasher config -> Flash size -> 16 MB
+Serial flasher config -> Flash size -> 按 `esptool.py flash_id` 检测值选择
 ```
 
-你之前用 `esptool.py flash_id` 已确认这块 ESP32-S3 是 `16MB` Flash，所以这里必须是 `16 MB`。如果不是，改成 `16 MB` 再保存。
+不要所有板子都固定选 `16 MB`。太极小派和 ESP32-S3-BOX-3B 常见是 `16 MB`，小智AI Moji小智 / Movecall Moji 是 `8 MB`。
 
-太极小派还需要进入：
+### 硬件差异配置
+
+#### 太极小派 esp32s3
+
+```text
+Xiaozhi Assistant -> Board Type -> 太极小派 esp32s3
+```
+
+还需要进入：
 
 ```text
 Xiaozhi Assistant -> TAIJIPAI_S3_CONFIG
@@ -100,6 +108,43 @@ Xiaozhi Assistant -> TAIJIPAI_S3_CONFIG
 | 2025 年 7 月前 / 批次小于等于 2528 | I2S Type STD |
 | 2025 年 7 月后 / 批次大于 2528 | I2S Type PDM |
 | 不确定批次 | 先用 STD；如果麦克风或唤醒异常，再改 PDM 重刷 |
+
+#### ESP32-S3-BOX-3B
+
+项目里对应的板型是乐鑫官方 `ESP-BOX-3`：
+
+```text
+Xiaozhi Assistant -> Board Type -> Espressif ESP-BOX-3
+```
+
+建议只额外确认这些项：
+
+| 配置项 | 建议值 |
+|---|---|
+| Serial flasher config -> Flash size | 16 MB |
+| Xiaozhi Assistant -> Select display style | 默认消息风格，或按需选择 |
+| Xiaozhi Assistant -> Enable Device-Side AEC | 开启 |
+| Wake Word Implementation Type | Wakenet model with AFE |
+
+ESP32-S3-BOX-3B 不需要配置 `TAIJIPAI_S3_CONFIG`。如果选择表情动画风格，需要按 `main/boards/esp-box-3/README.md` 额外配置自定义资源文件。
+
+#### 小智AI Moji小智 / Movecall Moji
+
+这块板的 `Board Type` 直接选项目里的 Movecall Moji：
+
+```text
+Xiaozhi Assistant -> Board Type -> Movecall Moji 小智AI衍生版
+```
+
+建议只额外确认这些项：
+
+| 配置项 | 建议值 |
+|---|---|
+| Serial flasher config -> Flash size | 8 MB |
+| Partition Table -> Custom partition CSV file | partitions/v2/8m.csv |
+| Wake Word Implementation Type | Wakenet model with AFE |
+
+如果屏幕、麦克风或按键异常，先确认卖家给的板型是否确实是 `Movecall Moji 小智AI衍生版`，不要改选 `ESP-BOX-3`。
 
 保存退出：
 
@@ -132,7 +177,7 @@ idf.py -p COM3 flash
 
 如果串口不是 `COM3`，替换成你的实际串口。
 
-也可以用 ESP-IDF 输出的完整 `esptool` 命令烧录 16MB Flash：
+也可以用 ESP-IDF 输出的完整 `esptool` 命令烧录 16MB Flash。下面这条只适用于 16MB Flash 的板子，8MB 的 Movecall Moji 不要用这条，直接用 `idf.py -p COM3 flash`：
 
 ```powershell
 python -m esptool --chip esp32s3 -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 build\bootloader\bootloader.bin 0x8000 build\partition_table\partition-table.bin 0xd000 build\ota_data_initial.bin 0x20000 build\xiaozhi.bin 0x800000 build\generated_assets.bin
