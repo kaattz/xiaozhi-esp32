@@ -41,7 +41,7 @@
             background-color: #ccc;
             cursor: not-allowed;
         }
-        #remember_bssid, #sleep_mode, #auto_firmware_upgrade, #wake_arbitration_enabled {
+        #remember_bssid, #sleep_mode, #auto_firmware_upgrade, #wake_arbitration_enabled, #ha_mqtt_enabled {
             width: auto;
         }
 
@@ -328,6 +328,41 @@
                     <input type="checkbox" id="wake_arbitration_enabled" name="wake_arbitration_enabled">
                 </p>
 
+                <!-- Home Assistant MQTT -->
+                <fieldset style="border: 1px solid #ddd; border-radius: 6px; padding: 12px; margin: 20px 0;">
+                    <legend data-lang="ha_mqtt_title">Home Assistant MQTT</legend>
+                    <p style="display: flex; align-items: center; gap: 10px;">
+                        <label for="ha_mqtt_enabled" style="margin: 0;">
+                            <span data-lang="ha_mqtt_enabled">Enable HA MQTT bridge</span>
+                        </label>
+                        <input type="checkbox" id="ha_mqtt_enabled" name="ha_mqtt_enabled">
+                    </p>
+                    <p>
+                        <label for="ha_mqtt_host" data-lang="ha_mqtt_host">MQTT Host:</label>
+                        <input type="text" id="ha_mqtt_host" name="ha_mqtt_host">
+                    </p>
+                    <p>
+                        <label for="ha_mqtt_port" data-lang="ha_mqtt_port">MQTT Port:</label>
+                        <input type="number" id="ha_mqtt_port" name="ha_mqtt_port" min="1" max="65535" value="1883">
+                    </p>
+                    <p>
+                        <label for="ha_mqtt_username" data-lang="ha_mqtt_username">MQTT Username:</label>
+                        <input type="text" id="ha_mqtt_username" name="ha_mqtt_username">
+                    </p>
+                    <p>
+                        <label for="ha_mqtt_password" data-lang="ha_mqtt_password">MQTT Password:</label>
+                        <input type="password" id="ha_mqtt_password" name="ha_mqtt_password">
+                    </p>
+                    <p>
+                        <label for="ha_mqtt_client_id" data-lang="ha_mqtt_client_id">MQTT Client ID:</label>
+                        <input type="text" id="ha_mqtt_client_id" name="ha_mqtt_client_id">
+                    </p>
+                    <p>
+                        <label for="ha_mqtt_device_name" data-lang="ha_mqtt_device_name">HA Device Name:</label>
+                        <input type="text" id="ha_mqtt_device_name" name="ha_mqtt_device_name">
+                    </p>
+                </fieldset>
+
                 <p style="text-align: center;">
                     <input type="submit" value="Save" id="advanced_button" data-lang-value="save">
                 </p>
@@ -488,6 +523,14 @@
                 sleep_mode: 'Enable Sleep Mode',
                 auto_firmware_upgrade: 'Enable automatic firmware upgrade',
                 wake_arbitration_enabled: 'Enable Wake Arbitration',
+                ha_mqtt_title: 'Home Assistant MQTT',
+                ha_mqtt_enabled: 'Enable HA MQTT bridge',
+                ha_mqtt_host: 'MQTT Host:',
+                ha_mqtt_port: 'MQTT Port:',
+                ha_mqtt_username: 'MQTT Username:',
+                ha_mqtt_password: 'MQTT Password:',
+                ha_mqtt_client_id: 'MQTT Client ID:',
+                ha_mqtt_device_name: 'HA Device Name:',
                 save: 'Save'
             },
             'es-ES': {
@@ -1012,6 +1055,14 @@
                 sleep_mode: '启用睡眠模式',
                 auto_firmware_upgrade: '启用自动固件升级',
                 wake_arbitration_enabled: '启用 Wake Arbitration',
+                ha_mqtt_title: 'Home Assistant MQTT',
+                ha_mqtt_enabled: '启用 HA MQTT 桥接',
+                ha_mqtt_host: 'MQTT 主机:',
+                ha_mqtt_port: 'MQTT 端口:',
+                ha_mqtt_username: 'MQTT 用户名:',
+                ha_mqtt_password: 'MQTT 密码:',
+                ha_mqtt_client_id: 'MQTT Client ID:',
+                ha_mqtt_device_name: 'HA 设备名称:',
                 save: '保存'
             },
             'zh-TW': {
@@ -1032,6 +1083,14 @@
                 sleep_mode: '啟用睡眠模式',
                 auto_firmware_upgrade: '啟用自動韌體升級',
                 wake_arbitration_enabled: '啟用 Wake Arbitration',
+                ha_mqtt_title: 'Home Assistant MQTT',
+                ha_mqtt_enabled: '啟用 HA MQTT 橋接',
+                ha_mqtt_host: 'MQTT 主機:',
+                ha_mqtt_port: 'MQTT 連接埠:',
+                ha_mqtt_username: 'MQTT 使用者名稱:',
+                ha_mqtt_password: 'MQTT 密碼:',
+                ha_mqtt_client_id: 'MQTT Client ID:',
+                ha_mqtt_device_name: 'HA 裝置名稱:',
                 save: '儲存'
             }
         };
@@ -1365,7 +1424,14 @@
                 remember_bssid: document.getElementById('remember_bssid').checked,
                 sleep_mode: document.getElementById('sleep_mode').checked,
                 auto_firmware_upgrade: document.getElementById('auto_firmware_upgrade').checked,
-                wake_arbitration_enabled: document.getElementById('wake_arbitration_enabled').checked
+                wake_arbitration_enabled: document.getElementById('wake_arbitration_enabled').checked,
+                ha_mqtt_enabled: document.getElementById('ha_mqtt_enabled').checked,
+                ha_mqtt_host: document.getElementById('ha_mqtt_host').value,
+                ha_mqtt_port: parseInt(document.getElementById('ha_mqtt_port').value),
+                ha_mqtt_username: document.getElementById('ha_mqtt_username').value,
+                ha_mqtt_password: document.getElementById('ha_mqtt_password').value,
+                ha_mqtt_client_id: document.getElementById('ha_mqtt_client_id').value,
+                ha_mqtt_device_name: document.getElementById('ha_mqtt_device_name').value
             };
 
             try {
@@ -1450,6 +1516,27 @@
                 }
                 if (data.wake_arbitration_enabled !== undefined) {
                     document.getElementById('wake_arbitration_enabled').checked = data.wake_arbitration_enabled;
+                }
+                if (data.ha_mqtt_enabled !== undefined) {
+                    document.getElementById('ha_mqtt_enabled').checked = data.ha_mqtt_enabled;
+                }
+                if (data.ha_mqtt_host !== undefined) {
+                    document.getElementById('ha_mqtt_host').value = data.ha_mqtt_host;
+                }
+                if (data.ha_mqtt_port !== undefined) {
+                    document.getElementById('ha_mqtt_port').value = data.ha_mqtt_port;
+                }
+                if (data.ha_mqtt_username !== undefined) {
+                    document.getElementById('ha_mqtt_username').value = data.ha_mqtt_username;
+                }
+                if (data.ha_mqtt_password !== undefined) {
+                    document.getElementById('ha_mqtt_password').value = data.ha_mqtt_password;
+                }
+                if (data.ha_mqtt_client_id !== undefined) {
+                    document.getElementById('ha_mqtt_client_id').value = data.ha_mqtt_client_id;
+                }
+                if (data.ha_mqtt_device_name !== undefined) {
+                    document.getElementById('ha_mqtt_device_name').value = data.ha_mqtt_device_name;
                 }
             } catch (error) {
                 console.error('Error loading advanced config:', error);

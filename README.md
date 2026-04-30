@@ -34,6 +34,7 @@ The stable version of v1 is 1.9.2. You can switch to v1 by running `git checkout
 - Supports ESP32-C3, ESP32-S3, ESP32-P4 chip platforms
 - Device-side MCP for device control (Speaker, LED, Servo, GPIO, etc.)
 - Cloud-side MCP to extend large model capabilities (smart home control, PC desktop operation, knowledge search, email, etc.)
+- Home Assistant MQTT bridge: exposes device entities to Home Assistant and allows Home Assistant to remotely start a XiaoZhi conversation with a text command
 - Customizable wake words, fonts, emojis, and chat backgrounds with online web-based editing ([Custom Assets Generator](https://github.com/78/xiaozhi-assets-generator))
 
 ## Hardware
@@ -126,6 +127,35 @@ The firmware connects to the official [xiaozhi.me](https://xiaozhi.me) server by
 - [MCP Protocol Interaction Flow](docs/mcp-protocol.md) - Device-side MCP protocol implementation
 - [MQTT + UDP Hybrid Communication Protocol Document](docs/mqtt-udp.md)
 - [A detailed WebSocket communication protocol document](docs/websocket.md)
+
+### Home Assistant MQTT Bridge
+
+This firmware can create a separate MQTT connection for Home Assistant. It is independent from the XiaoZhi server MQTT/WebSocket protocol and is only used for Home Assistant discovery, state publishing, and remote command input.
+
+Configure it from the Wi-Fi captive portal:
+
+1. Enter Wi-Fi configuration mode on the device.
+2. Open the web configuration page.
+3. Go to **Advanced**.
+4. Enable **Home Assistant MQTT**.
+5. Fill in the Home Assistant MQTT broker `host`, `port`, `username`, and `password`.
+6. Save the settings and reboot the device.
+
+The settings are stored in NVS namespace `ha_mqtt`, so changing broker parameters does not require rebuilding firmware.
+
+After connecting to the broker, the device publishes Home Assistant MQTT discovery entities:
+
+| Entity | Purpose |
+|---|---|
+| `wake up` | Remotely wakes XiaoZhi with the default wake text |
+| `wake_word` text command | Sends a text command as a remote XiaoZhi conversation input |
+| `device_status` | Publishes current device state, such as idle/listening/speaking |
+| `user_message` | Publishes the latest recognized user text |
+| `assistant_message` | Publishes the latest assistant reply text |
+| `volume` | Reads and controls output volume |
+| `brightness` | Reads and controls screen backlight brightness when the board supports backlight |
+
+Important: this is not local TTS. Home Assistant writes a text command to the device, and the device forwards that text through the normal XiaoZhi wake/conversation flow. The final spoken reply is still produced by the XiaoZhi server-side ASR/LLM/TTS pipeline.
 
 ## Large Model Configuration
 

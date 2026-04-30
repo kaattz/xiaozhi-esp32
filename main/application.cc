@@ -10,6 +10,8 @@
 #include "assets.h"
 #include "settings.h"
 #include "wake_arbiter_client.h"
+#include "home_assistant_manager.h"
+#include "announcement_audio_client.h"
 
 #include <cstring>
 #include <esp_log.h>
@@ -340,6 +342,9 @@ void Application::ActivationTask() {
     // Initialize the protocol
     InitializeProtocol();
 
+    // Start the independent Home Assistant MQTT bridge after network is ready.
+    HomeAssistantManager::GetInstance().Start();
+
     // Signal completion to main loop
     xEventGroupSetBits(event_group_, MAIN_EVENT_ACTIVATION_DONE);
 }
@@ -568,6 +573,7 @@ void Application::InitializeProtocol() {
                 auto text = cJSON_GetObjectItem(root, "text");
                 if (cJSON_IsString(text)) {
                     ESP_LOGI(TAG, "<< %s", text->valuestring);
+                    HomeAssistantManager::GetInstance().PublishAssistantMessage(text->valuestring);
                     Schedule([display, message = std::string(text->valuestring)]() {
                         display->SetChatMessage("assistant", message.c_str());
                     });
@@ -577,6 +583,7 @@ void Application::InitializeProtocol() {
             auto text = cJSON_GetObjectItem(root, "text");
             if (cJSON_IsString(text)) {
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
+                HomeAssistantManager::GetInstance().PublishUserMessage(text->valuestring);
                 Schedule([display, message = std::string(text->valuestring)]() {
                     display->SetChatMessage("user", message.c_str());
                 });
@@ -909,6 +916,11 @@ void Application::EndWakeArbitrationSession() {
 void Application::HandleStateChangedEvent() {
     DeviceState new_state = state_machine_.GetState();
     clock_ticks_ = 0;
+    if (new_state != kDeviceStateListening) {
+        ++announcement_listen_token_;
+    }
+
+    HomeAssistantManager::GetInstance().PublishDeviceState(DeviceStateMachine::GetStateName(new_state));
 
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
@@ -1100,6 +1112,119 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
                 protocol_->CloseAudioChannel();
             }
         });
+    }
+}
+
+void Application::PlayRemoteAnnouncement(const std::string& text, AnnouncementMode mode) {
+    if (text.empty()) {
+        return;
+    }
+
+    Schedule([this, text, mode]() {
+        auto state = GetDeviceState();
+        if (state == kDeviceStateSpeaking) {
+            ESP_LOGW(TAG, "Ignore announcement while device is speaking");
+            return;
+        }
+        if (state != kDeviceStateIdle) {
+            ESP_LOGW(TAG, "Ignore announcement while device state is %d", static_cast<int>(state));
+            return;
+        }
+
+        AnnouncementAudioFrames audio;
+        AnnouncementAudioClient client;
+        if (!client.FetchFrames(text, mode, audio) || audio.frames.empty()) {
+            ESP_LOGE(TAG, "Failed to fetch announcement audio");
+            return;
+        }
+
+        audio_service_.ResetDecoder();
+        SetDeviceState(kDeviceStateSpeaking);
+
+        uint32_t timestamp = 0;
+        for (const auto& frame : audio.frames) {
+            auto packet = std::make_unique<AudioStreamPacket>();
+            packet->sample_rate = audio.sample_rate;
+            packet->frame_duration = audio.frame_duration_ms;
+            packet->timestamp = timestamp;
+            packet->payload = frame;
+            if (!audio_service_.PushPacketToDecodeQueue(std::move(packet), true)) {
+                ESP_LOGE(TAG, "Failed to queue announcement audio frame");
+                SetDeviceState(kDeviceStateIdle);
+                return;
+            }
+            timestamp += audio.frame_duration_ms;
+        }
+
+        audio_service_.WaitForPlaybackQueueEmpty();
+        vTaskDelay(pdMS_TO_TICKS(audio.frame_duration_ms));
+        if (mode == kAnnouncementModeQuestion && audio.listen_after_playback) {
+            if (protocol_ == nullptr) {
+                ESP_LOGE(TAG, "Protocol not initialized for question announcement listening");
+                SetDeviceState(kDeviceStateIdle);
+                return;
+            }
+            if (!protocol_->IsAudioChannelOpened() && !protocol_->OpenAudioChannel()) {
+                ESP_LOGE(TAG, "Failed to open audio channel for question announcement");
+                SetDeviceState(kDeviceStateIdle);
+                return;
+            }
+            if (audio.listen_timeout_seconds <= 0) {
+                ESP_LOGE(TAG, "Invalid question announcement listen timeout");
+                protocol_->CloseAudioChannel();
+                SetDeviceState(kDeviceStateIdle);
+                return;
+            }
+            auto listen_token = ++announcement_listen_token_;
+            SetListeningMode(kListeningModeAutoStop);
+            StartAnnouncementListenTimeout(audio.listen_timeout_seconds, listen_token);
+            return;
+        }
+        SetDeviceState(kDeviceStateIdle);
+    });
+}
+
+void Application::StartAnnouncementListenTimeout(int timeout_seconds, uint32_t listen_token) {
+    if (timeout_seconds <= 0) {
+        return;
+    }
+
+    struct TimeoutContext {
+        Application* app;
+        int timeout_seconds;
+        uint32_t listen_token;
+    };
+
+    auto context = new TimeoutContext{this, timeout_seconds, listen_token};
+    auto task_created = xTaskCreate([](void* arg) {
+        auto context = static_cast<TimeoutContext*>(arg);
+        vTaskDelay(pdMS_TO_TICKS(context->timeout_seconds * 1000));
+        auto app = context->app;
+        auto listen_token = context->listen_token;
+        delete context;
+
+        app->Schedule([app, listen_token]() {
+            if (app->announcement_listen_token_ != listen_token) {
+                return;
+            }
+            if (app->GetDeviceState() != kDeviceStateListening) {
+                return;
+            }
+            if (app->protocol_ != nullptr && app->protocol_->IsAudioChannelOpened()) {
+                app->protocol_->CloseAudioChannel();
+            }
+            app->SetDeviceState(kDeviceStateIdle);
+        });
+        vTaskDelete(NULL);
+    }, "ann_listen_timeout", 4096, context, 1, nullptr);
+    if (task_created != pdPASS) {
+        delete context;
+        ++announcement_listen_token_;
+        ESP_LOGE(TAG, "Failed to create announcement listen timeout task");
+        if (protocol_ != nullptr && protocol_->IsAudioChannelOpened()) {
+            protocol_->CloseAudioChannel();
+        }
+        SetDeviceState(kDeviceStateIdle);
     }
 }
 

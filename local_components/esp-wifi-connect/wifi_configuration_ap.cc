@@ -24,6 +24,25 @@
 namespace {
 constexpr const char* kAutoFirmwareUpgradeKey = "auto_fw_upg";
 constexpr const char* kWakeArbitrationEnabledKey = "wake_arb";
+constexpr const char* kHaMqttNamespace = "ha_mqtt";
+
+std::string ReadNvsString(nvs_handle_t nvs, const char* key, const char* default_value = "") {
+    size_t size = 0;
+    if (nvs_get_str(nvs, key, nullptr, &size) != ESP_OK) {
+        return default_value;
+    }
+
+    std::string value(size, '\0');
+    ESP_ERROR_CHECK(nvs_get_str(nvs, key, value.data(), &size));
+    while (!value.empty() && value.back() == '\0') {
+        value.pop_back();
+    }
+    return value;
+}
+
+bool IsStringItemValid(const cJSON* item, size_t max_length) {
+    return cJSON_IsString(item) && item->valuestring != nullptr && strlen(item->valuestring) <= max_length;
+}
 }
 
 #define WIFI_CONNECTED_BIT BIT0
@@ -43,6 +62,8 @@ WifiConfigurationAp::WifiConfigurationAp()
     remember_bssid_ = false;
     auto_firmware_upgrade_ = false;
     wake_arbitration_enabled_ = false;
+    ha_mqtt_enabled_ = false;
+    ha_mqtt_port_ = 1883;
 }
 
 std::vector<wifi_ap_record_t> WifiConfigurationAp::GetAccessPoints()
@@ -239,6 +260,8 @@ void WifiConfigurationAp::StartAccessPoint()
 
         nvs_close(nvs);
     }
+
+    LoadHaMqttSettings();
 }
 
 void WifiConfigurationAp::StartWebServer()
@@ -553,6 +576,21 @@ void WifiConfigurationAp::StartWebServer()
             cJSON_AddBoolToObject(json, "sleep_mode", this_->sleep_mode_);
             cJSON_AddBoolToObject(json, "auto_firmware_upgrade", this_->auto_firmware_upgrade_);
             cJSON_AddBoolToObject(json, "wake_arbitration_enabled", this_->wake_arbitration_enabled_);
+            cJSON_AddBoolToObject(json, "ha_mqtt_enabled", this_->ha_mqtt_enabled_);
+            cJSON_AddStringToObject(json, "ha_mqtt_host", this_->ha_mqtt_host_.c_str());
+            cJSON_AddNumberToObject(json, "ha_mqtt_port", this_->ha_mqtt_port_);
+            cJSON_AddStringToObject(json, "ha_mqtt_username", this_->ha_mqtt_username_.c_str());
+            cJSON_AddStringToObject(json, "ha_mqtt_password", this_->ha_mqtt_password_.c_str());
+            cJSON_AddStringToObject(json, "ha_mqtt_client_id", this_->ha_mqtt_client_id_.c_str());
+            cJSON_AddStringToObject(json, "ha_mqtt_device_name", this_->ha_mqtt_device_name_.c_str());
+
+            cJSON* ha_mqtt = cJSON_CreateObject();
+            if (ha_mqtt) {
+                cJSON_AddBoolToObject(ha_mqtt, "enabled", this_->ha_mqtt_enabled_);
+                cJSON_AddStringToObject(ha_mqtt, "host", this_->ha_mqtt_host_.c_str());
+                cJSON_AddNumberToObject(ha_mqtt, "port", this_->ha_mqtt_port_);
+                cJSON_AddItemToObject(json, "ha_mqtt", ha_mqtt);
+            }
 
             // 发送JSON响应
             char *json_str = cJSON_PrintUnformatted(json);
@@ -579,7 +617,7 @@ void WifiConfigurationAp::StartWebServer()
         .handler = [](httpd_req_t *req) -> esp_err_t {
             char *buf;
             size_t buf_len = req->content_len;
-            if (buf_len > 1024) {
+            if (buf_len > 2048) {
                 httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Payload too large");
                 return ESP_FAIL;
             }
@@ -688,6 +726,14 @@ void WifiConfigurationAp::StartWebServer()
                 }
             }
 
+            err = this_->SaveHaMqttSettings(json);
+            if (err != ESP_OK) {
+                nvs_close(nvs);
+                cJSON_Delete(json);
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid HA MQTT configuration");
+                return ESP_FAIL;
+            }
+
             // 提交更改
             err = nvs_commit(nvs);
             nvs_close(nvs);
@@ -703,9 +749,9 @@ void WifiConfigurationAp::StartWebServer()
             httpd_resp_set_hdr(req, "Connection", "close");
             httpd_resp_send(req, "{\"success\":true}", HTTPD_RESP_USE_STRLEN);
 
-            ESP_LOGI(TAG, "Saved settings: ota_url=%s, max_tx_power=%d, remember_bssid=%d, sleep_mode=%d, auto_firmware_upgrade=%d, wake_arbitration_enabled=%d",
+            ESP_LOGI(TAG, "Saved settings: ota_url=%s, max_tx_power=%d, remember_bssid=%d, sleep_mode=%d, auto_firmware_upgrade=%d, wake_arbitration_enabled=%d, ha_mqtt_enabled=%d, ha_mqtt_host=%s",
                 this_->ota_url_.c_str(), this_->max_tx_power_, this_->remember_bssid_, this_->sleep_mode_,
-                this_->auto_firmware_upgrade_, this_->wake_arbitration_enabled_);
+                this_->auto_firmware_upgrade_, this_->wake_arbitration_enabled_, this_->ha_mqtt_enabled_, this_->ha_mqtt_host_.c_str());
             return ESP_OK;
         },
         .user_ctx = this
@@ -713,6 +759,97 @@ void WifiConfigurationAp::StartWebServer()
     ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &advanced_submit));
 
     ESP_LOGI(TAG, "Web server started");
+}
+
+void WifiConfigurationAp::LoadHaMqttSettings()
+{
+    ha_mqtt_enabled_ = false;
+    ha_mqtt_host_.clear();
+    ha_mqtt_port_ = 1883;
+    ha_mqtt_username_.clear();
+    ha_mqtt_password_.clear();
+    ha_mqtt_client_id_.clear();
+    ha_mqtt_device_name_.clear();
+
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(kHaMqttNamespace, NVS_READONLY, &nvs);
+    if (err != ESP_OK) {
+        return;
+    }
+
+    uint8_t enabled = 0;
+    if (nvs_get_u8(nvs, "enabled", &enabled) == ESP_OK) {
+        ha_mqtt_enabled_ = enabled != 0;
+    }
+
+    int32_t port = 1883;
+    if (nvs_get_i32(nvs, "port", &port) == ESP_OK) {
+        ha_mqtt_port_ = port;
+    }
+
+    ha_mqtt_host_ = ReadNvsString(nvs, "host");
+    ha_mqtt_username_ = ReadNvsString(nvs, "username");
+    ha_mqtt_password_ = ReadNvsString(nvs, "password");
+    ha_mqtt_client_id_ = ReadNvsString(nvs, "client_id");
+    ha_mqtt_device_name_ = ReadNvsString(nvs, "device_name");
+
+    nvs_close(nvs);
+}
+
+esp_err_t WifiConfigurationAp::SaveHaMqttSettings(const cJSON* json)
+{
+    const auto* enabled_item = cJSON_GetObjectItem(json, "ha_mqtt_enabled");
+    const auto* host_item = cJSON_GetObjectItem(json, "ha_mqtt_host");
+    const auto* port_item = cJSON_GetObjectItem(json, "ha_mqtt_port");
+    const auto* username_item = cJSON_GetObjectItem(json, "ha_mqtt_username");
+    const auto* password_item = cJSON_GetObjectItem(json, "ha_mqtt_password");
+    const auto* client_id_item = cJSON_GetObjectItem(json, "ha_mqtt_client_id");
+    const auto* device_name_item = cJSON_GetObjectItem(json, "ha_mqtt_device_name");
+
+    if (!cJSON_IsBool(enabled_item) ||
+        !IsStringItemValid(host_item, 128) ||
+        !cJSON_IsNumber(port_item) ||
+        !IsStringItemValid(username_item, 128) ||
+        !IsStringItemValid(password_item, 128) ||
+        !IsStringItemValid(client_id_item, 64) ||
+        !IsStringItemValid(device_name_item, 64)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const bool enabled = cJSON_IsTrue(enabled_item);
+    const int32_t port = port_item->valueint;
+    if (port <= 0 || port > 65535) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (enabled && strlen(host_item->valuestring) == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(kHaMqttNamespace, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    ha_mqtt_enabled_ = enabled;
+    ha_mqtt_host_ = host_item->valuestring;
+    ha_mqtt_port_ = port;
+    ha_mqtt_username_ = username_item->valuestring;
+    ha_mqtt_password_ = password_item->valuestring;
+    ha_mqtt_client_id_ = client_id_item->valuestring;
+    ha_mqtt_device_name_ = device_name_item->valuestring;
+
+    err = nvs_set_u8(nvs, "enabled", ha_mqtt_enabled_ ? 1 : 0);
+    if (err == ESP_OK) err = nvs_set_str(nvs, "host", ha_mqtt_host_.c_str());
+    if (err == ESP_OK) err = nvs_set_i32(nvs, "port", ha_mqtt_port_);
+    if (err == ESP_OK) err = nvs_set_str(nvs, "username", ha_mqtt_username_.c_str());
+    if (err == ESP_OK) err = nvs_set_str(nvs, "password", ha_mqtt_password_.c_str());
+    if (err == ESP_OK) err = nvs_set_str(nvs, "client_id", ha_mqtt_client_id_.c_str());
+    if (err == ESP_OK) err = nvs_set_str(nvs, "device_name", ha_mqtt_device_name_.c_str());
+    if (err == ESP_OK) err = nvs_commit(nvs);
+
+    nvs_close(nvs);
+    return err;
 }
 
 bool WifiConfigurationAp::ConnectToWifi(const std::string &ssid, const std::string &password)

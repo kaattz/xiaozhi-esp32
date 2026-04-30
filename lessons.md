@@ -1,2 +1,6 @@
 - 用户指出 Home Assistant 控制是通过 MCP 调用时，不能直接断言“官方云默认按 room 控制 HA 完全不行”。需要先区分：room 是否能通过设备端 MCP 工具描述、设备状态、工具参数或前置服务传入；HA 控制逻辑是在官方云内置能力里，还是设备/自建 MCP 工具里。
 - Home Assistant 的 `llm.LLMContext.context` 是 HA 核心 `Context` 对象，不能塞自定义字典；room 信息应通过 prompt、`device_id` 或工具参数传递，否则可能出现工具返回成功但实际服务调用不生效。
+- 用户说“继续”排障或测试时，不等于授权提交/推送代码；提交、推送、刷机这类动作前必须明确确认当前目标。
+- 小智云有自己的 MCP 接入点配置，截图里的 HassTurnOn/HassTurnOff/GetLiveContext 等工具是小智云对话时直接可调用的 MCP 工具；讨论 gateway pending confirmation 时，不能把“HA 直接调用 gateway”误说成现有小智云控制 HA 的主链路。
+- 小智云当前只有一个 MCP 接入点；用户现有接入点由 `ha-mcp-for-xiaozhi` 集成提供。新增 gateway pending confirmation 不能要求小智云同时配置第二个 MCP 接入点，必须考虑扩展/聚合现有 `ha-mcp-for-xiaozhi` 接入点。
+- 播报模式只是本地播放音频，不会自动唤醒小智云会话；如果用户在播报后直接说“好的”，设备没有进入监听态，小智云收不到这句话。pending confirmation 方案必须包含“播报后打开确认监听窗口”或“要求用户先唤醒”的入口设计。

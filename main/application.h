@@ -10,6 +10,7 @@
 #include <mutex>
 #include <deque>
 #include <memory>
+#include <cstdint>
 
 #include "protocol.h"
 #include "ota.h"
@@ -37,6 +38,11 @@ enum AecMode {
     kAecOff,
     kAecOnDeviceSide,
     kAecOnServerSide,
+};
+
+enum AnnouncementMode : int {
+    kAnnouncementModeAnnouncement,
+    kAnnouncementModeQuestion,
 };
 
 class Application {
@@ -105,6 +111,7 @@ public:
 
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
+    void PlayRemoteAnnouncement(const std::string& text, AnnouncementMode mode);
     bool UpgradeFirmware(const std::string& url, const std::string& version = "");
     bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
@@ -143,6 +150,7 @@ private:
     bool auto_firmware_upgrade_enabled_ = false;
     bool wake_arbitration_enabled_ = false;
     bool wake_arbitration_session_active_ = false;
+    uint32_t announcement_listen_token_ = 0;
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 
@@ -160,6 +168,7 @@ private:
     void ContinueWakeWordArbitration(const std::string& wake_word);
     void ContinueWakeWordInvoke(const std::string& wake_word);
     void EndWakeArbitrationSession();
+    void StartAnnouncementListenTimeout(int timeout_seconds, uint32_t listen_token);
 
     // Activation task (runs in background)
     void ActivationTask();

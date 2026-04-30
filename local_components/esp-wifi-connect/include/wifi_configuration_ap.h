@@ -12,6 +12,7 @@
 #include <esp_timer.h>
 #include <esp_netif.h>
 #include <esp_wifi_types_generic.h>
+#include <cJSON.h>
 
 #include "dns_server.h"
 #include "sdkconfig.h"
@@ -73,6 +74,13 @@ private:
     bool sleep_mode_;
     bool auto_firmware_upgrade_;
     bool wake_arbitration_enabled_;
+    bool ha_mqtt_enabled_;
+    std::string ha_mqtt_host_;
+    int32_t ha_mqtt_port_;
+    std::string ha_mqtt_username_;
+    std::string ha_mqtt_password_;
+    std::string ha_mqtt_client_id_;
+    std::string ha_mqtt_device_name_;
 
     // Callbacks
     std::function<void()> on_exit_requested_;
@@ -83,6 +91,8 @@ private:
     // Event handlers
     static void WifiEventHandler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
     static void IpEventHandler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
+    void LoadHaMqttSettings();
+    esp_err_t SaveHaMqttSettings(const cJSON* json);
 #if !CONFIG_IDF_TARGET_ESP32P4
     static void SmartConfigEventHandler(void* arg, esp_event_base_t event_base,
                                       int32_t event_id, void* event_data);

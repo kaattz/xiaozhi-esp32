@@ -34,6 +34,7 @@ v1 的稳定版本为 1.9.2，可以通过 `git checkout v1` 来切换到 v1 版
 - 支持 ESP32-C3、ESP32-S3、ESP32-P4 芯片平台
 - 通过设备端 MCP 实现设备控制（音量、灯光、电机、GPIO 等）
 - 通过云端 MCP 扩展大模型能力（智能家居控制、PC桌面操作、知识搜索、邮件收发等）
+- Home Assistant MQTT 桥接：将设备实体接入 Home Assistant，并支持本地播报和询问播报
 - 自定义唤醒词、字体、表情与聊天背景，支持网页端在线修改 ([自定义Assets生成器](https://github.com/78/xiaozhi-assets-generator))
 
 ### 本分支改动说明
@@ -141,6 +142,40 @@ v1 的稳定版本为 1.9.2，可以通过 `git checkout v1` 来切换到 v1 版
 - [MCP 协议交互流程](docs/mcp-protocol_zh.md) - 设备端 MCP 协议的实现方式
 - [MQTT + UDP 混合通信协议文档](docs/mqtt-udp_zh.md)
 - [一份详细的 WebSocket 通信协议文档](docs/websocket_zh.md)
+
+### Home Assistant MQTT 桥接
+
+固件可以为 Home Assistant 单独创建一条 MQTT 连接。这条连接独立于小智服务端的 MQTT/WebSocket 协议，只用于 Home Assistant 自动发现、状态上报和播报控制。
+
+配置方式：
+
+1. 让设备进入 Wi-Fi 配网模式。
+2. 打开设备配网页面。
+3. 进入 **高级选项**。
+4. 启用 **Home Assistant MQTT**。
+5. 填写 Home Assistant MQTT Broker 的 `host`、`port`、`username`、`password`。
+6. 保存配置并重启设备。
+
+这些配置保存在 NVS 的 `ha_mqtt` 命名空间里，所以修改 MQTT 参数不需要重新编译固件。
+
+连接 Broker 后，设备会通过 MQTT Discovery 在 Home Assistant 中创建这些实体：
+
+| 实体 | 作用 |
+|---|---|
+| `wake up` | 用默认唤醒文本远程唤醒小智 |
+| `announcement` | 从 xiaozhi-gateway 拉取音频并本地播放，不开麦 |
+| `question` | 从 xiaozhi-gateway 拉取音频并本地播放，播放后短时进入 listening |
+| `device_status` | 上报设备当前状态，例如 idle/listening/speaking |
+| `user_message` | 上报最近一次识别到的用户文本 |
+| `assistant_message` | 上报最近一次小智回复文本 |
+| `volume` | 读取和控制输出音量 |
+| `brightness` | 在开发板支持背光时读取和控制屏幕亮度 |
+
+注意：
+
+- `text.<client_id>_announcement` 是普通播报，只本地播放，不会把播报内容当作麦克风音频上传给小智服务端，也不会自动开麦。
+- `text.<client_id>_question` 是询问播报，播放完成后会短时进入 listening，让用户回答“好的/不用”等确认语。
+- `question` 需要配合 `xiaozhi-gateway` 的 pending confirmation API 和 `ha-mcp-for-xiaozhi` 的 `ResolvePendingConfirmation` 工具使用。
 
 ## 大模型配置
 
