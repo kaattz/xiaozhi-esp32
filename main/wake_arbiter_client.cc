@@ -11,7 +11,7 @@
 #define TAG "WakeArbiterClient"
 
 namespace {
-constexpr int kWakeArbitrationTimeoutMs = 800;
+constexpr int kWakeArbitrationTimeoutMs = 2000;
 }
 
 WakeArbitrationDecision ParseWakeArbitrationDecision(const std::string& response_body) {

@@ -6,3 +6,4 @@
 - 播报模式只是本地播放音频，不会自动唤醒小智云会话；如果用户在播报后直接说“好的”，设备没有进入监听态，小智云收不到这句话。pending confirmation 方案必须包含“播报后打开确认监听窗口”或“要求用户先唤醒”的入口设计。
 - 发布 HACS 集成版本时，只提交代码和推送 tag 不够；如果仓库使用 `zip_release`，必须同时基于该 tag 创建 GitHub Release 并上传 `ha-mcp-for-xiaozhi.zip`，否则 HACS 不会识别到新版本。
 - 用户命令已显式包含房间（例如“打开客厅吊灯”）时，HA MCP 工具必须把房间作为正式工具参数传递，不能依赖 gateway active context；否则无 active context 时会直接失败。
+- 用户指出早期自动补房间实现工作正常时，必须先用提交历史核对行为分界点；不要只按当前代码推断。`ha-mcp-for-xiaozhi` 早期方案曾把 `room_id`、`room_name`、`ha_area_id` 注入 `LLMContext.context`，后续提交才改为保留原始 HA context 并主要依赖 `device_id`/`preferred_area_id`。
