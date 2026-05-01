@@ -4,3 +4,5 @@
 - 小智云有自己的 MCP 接入点配置，截图里的 HassTurnOn/HassTurnOff/GetLiveContext 等工具是小智云对话时直接可调用的 MCP 工具；讨论 gateway pending confirmation 时，不能把“HA 直接调用 gateway”误说成现有小智云控制 HA 的主链路。
 - 小智云当前只有一个 MCP 接入点；用户现有接入点由 `ha-mcp-for-xiaozhi` 集成提供。新增 gateway pending confirmation 不能要求小智云同时配置第二个 MCP 接入点，必须考虑扩展/聚合现有 `ha-mcp-for-xiaozhi` 接入点。
 - 播报模式只是本地播放音频，不会自动唤醒小智云会话；如果用户在播报后直接说“好的”，设备没有进入监听态，小智云收不到这句话。pending confirmation 方案必须包含“播报后打开确认监听窗口”或“要求用户先唤醒”的入口设计。
+- 发布 HACS 集成版本时，只提交代码和推送 tag 不够；如果仓库使用 `zip_release`，必须同时基于该 tag 创建 GitHub Release 并上传 `ha-mcp-for-xiaozhi.zip`，否则 HACS 不会识别到新版本。
+- 用户命令已显式包含房间（例如“打开客厅吊灯”）时，HA MCP 工具必须把房间作为正式工具参数传递，不能依赖 gateway active context；否则无 active context 时会直接失败。

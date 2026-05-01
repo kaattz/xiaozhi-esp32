@@ -45,10 +45,6 @@ bool DecodeBase64Frame(const char* encoded, std::vector<uint8_t>& decoded) {
     return !decoded.empty();
 }
 
-const char* AnnouncementModeToString(AnnouncementMode mode) {
-    return mode == kAnnouncementModeQuestion ? "question" : "announcement";
-}
-
 bool ParseCreateJobResponse(
     const std::string& response_body,
     std::string& job_id,
@@ -59,15 +55,9 @@ bool ParseCreateJobResponse(
     }
 
     auto job_id_json = cJSON_GetObjectItem(root, "job_id");
-    auto listen_after_playback = cJSON_GetObjectItem(root, "listen_after_playback");
-    auto listen_timeout_seconds = cJSON_GetObjectItem(root, "listen_timeout_seconds");
     auto ok = cJSON_IsString(job_id_json) && job_id_json->valuestring != nullptr;
     if (ok) {
         job_id = job_id_json->valuestring;
-    }
-    out.listen_after_playback = cJSON_IsTrue(listen_after_playback);
-    if (cJSON_IsNumber(listen_timeout_seconds)) {
-        out.listen_timeout_seconds = listen_timeout_seconds->valueint;
     }
 
     cJSON_Delete(root);
@@ -138,7 +128,6 @@ bool ParseFramesResponse(
 
 bool AnnouncementAudioClient::FetchFrames(
     const std::string& text,
-    AnnouncementMode mode,
     AnnouncementAudioFrames& out) {
     auto create_url = BuildEndpointUrl("/announcement/jobs");
     if (create_url.empty()) {
@@ -152,7 +141,7 @@ bool AnnouncementAudioClient::FetchFrames(
     http->SetHeader("Content-Type", "application/json");
     http->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
     http->SetHeader("Client-Id", Board::GetInstance().GetUuid().c_str());
-    http->SetContent(BuildCreateJobPayload(text, mode));
+    http->SetContent(BuildCreateJobPayload(text));
 
     if (!http->Open("POST", create_url)) {
         ESP_LOGE(TAG, "Failed to create announcement job: %s", create_url.c_str());
@@ -239,8 +228,7 @@ std::string AnnouncementAudioClient::BuildEndpointUrl(const std::string& path) c
 }
 
 std::string AnnouncementAudioClient::BuildCreateJobPayload(
-    const std::string& text,
-    AnnouncementMode mode) const {
+    const std::string& text) const {
     cJSON* payload = cJSON_CreateObject();
     if (payload == nullptr) {
         return "{}";
@@ -248,7 +236,6 @@ std::string AnnouncementAudioClient::BuildCreateJobPayload(
     cJSON_AddStringToObject(payload, "device_id", SystemInfo::GetMacAddress().c_str());
     cJSON_AddStringToObject(payload, "client_id", Board::GetInstance().GetUuid().c_str());
     cJSON_AddStringToObject(payload, "text", text.c_str());
-    cJSON_AddStringToObject(payload, "mode", AnnouncementModeToString(mode));
 
     auto json_str = cJSON_PrintUnformatted(payload);
     std::string json = "{}";

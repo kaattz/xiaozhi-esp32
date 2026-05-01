@@ -54,14 +54,7 @@ void HomeAssistantManager::Start() {
         if (text.empty()) {
             return;
         }
-        Application::GetInstance().PlayRemoteAnnouncement(text, kAnnouncementModeAnnouncement);
-    });
-
-    question_->setOnText([](std::string text) {
-        if (text.empty()) {
-            return;
-        }
-        Application::GetInstance().PlayRemoteAnnouncement(text, kAnnouncementModeQuestion);
+        Application::GetInstance().PlayRemoteAnnouncement(text);
     });
 
     if (backlight != nullptr) {
@@ -155,10 +148,6 @@ HaEntityText* HomeAssistantManager::GetAnnouncementEntity() {
     return announcement_.get();
 }
 
-HaEntityText* HomeAssistantManager::GetQuestionEntity() {
-    return question_.get();
-}
-
 HaEntityNumber* HomeAssistantManager::GetBrightnessEntity() {
     return brightness_.get();
 }
@@ -191,13 +180,6 @@ void HomeAssistantManager::SetupEntities() {
                                           .is_password = false,
                                           .force_update = false,
                                           .retain = false}));
-    question_.reset(new HaEntityText(*ha_bridge_, "Question", "question",
-                                         {.min_text_length = 0,
-                                          .max_text_length = 255,
-                                          .with_state_topic = false,
-                                          .is_password = false,
-                                          .force_update = false,
-                                          .retain = false}));
     brightness_.reset(new HaEntityNumber(*ha_bridge_, "亮度", "brightness",
                                          {.min_value = 0,
                                           .max_value = 100,
@@ -220,7 +202,6 @@ void HomeAssistantManager::PublishConfiguration() {
     user_message_->publishConfiguration();
     assistant_message_->publishConfiguration();
     announcement_->publishConfiguration();
-    question_->publishConfiguration();
     brightness_->publishConfiguration();
     volume_->publishConfiguration();
 }

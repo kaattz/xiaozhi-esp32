@@ -31,6 +31,7 @@ public:
     void EncodeWakeWordData();
     bool GetWakeWordOpus(std::vector<uint8_t>& opus);
     const std::string& GetLastDetectedWakeWord() const { return last_detected_wake_word_; }
+    float GetLastWakeRmsDbfs() const;
 
 private:
     struct Command {
@@ -61,7 +62,7 @@ private:
     StackType_t* wake_word_encode_task_stack_ = nullptr;
     std::deque<std::vector<int16_t>> wake_word_pcm_;
     std::deque<std::vector<uint8_t>> wake_word_opus_;
-    std::mutex wake_word_mutex_;
+    mutable std::mutex wake_word_mutex_;
     std::condition_variable wake_word_cv_;
 
     void StoreWakeWordData(const std::vector<int16_t>& data);

@@ -164,7 +164,6 @@ v1 的稳定版本为 1.9.2，可以通过 `git checkout v1` 来切换到 v1 版
 |---|---|
 | `wake up` | 用默认唤醒文本远程唤醒小智 |
 | `announcement` | 从 xiaozhi-gateway 拉取音频并本地播放，不开麦 |
-| `question` | 从 xiaozhi-gateway 拉取音频并本地播放，播放后短时进入 listening |
 | `device_status` | 上报设备当前状态，例如 idle/listening/speaking |
 | `user_message` | 上报最近一次识别到的用户文本 |
 | `assistant_message` | 上报最近一次小智回复文本 |
@@ -174,8 +173,6 @@ v1 的稳定版本为 1.9.2，可以通过 `git checkout v1` 来切换到 v1 版
 注意：
 
 - `text.<client_id>_announcement` 是普通播报，只本地播放，不会把播报内容当作麦克风音频上传给小智服务端，也不会自动开麦。
-- `text.<client_id>_question` 是询问播报，播放完成后会短时进入 listening，让用户回答“好的/不用”等确认语。
-- `question` 需要配合 `xiaozhi-gateway` 的 pending confirmation API 和 `ha-mcp-for-xiaozhi` 的 `ResolvePendingConfirmation` 工具使用。
 
 ## 大模型配置
 

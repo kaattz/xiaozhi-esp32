@@ -12,12 +12,12 @@ WakeArbitrationDecision ParseWakeArbitrationDecision(const std::string& response
 
 class WakeArbiterClient {
 public:
-    bool RequestSession(const std::string& wake_word);
+    bool RequestSession(const std::string& wake_word, float wake_rms_dbfs);
     bool EndSession();
 
 private:
     std::string BuildEndpointUrl(const std::string& path) const;
-    std::string BuildWakeDetectedPayload(const std::string& wake_word) const;
+    std::string BuildWakeDetectedPayload(const std::string& wake_word, float wake_rms_dbfs) const;
     std::string BuildSessionEndPayload() const;
 };
 

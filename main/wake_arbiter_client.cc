@@ -30,7 +30,7 @@ WakeArbitrationDecision ParseWakeArbitrationDecision(const std::string& response
     return decision;
 }
 
-bool WakeArbiterClient::RequestSession(const std::string& wake_word) {
+bool WakeArbiterClient::RequestSession(const std::string& wake_word, float wake_rms_dbfs) {
     auto start_time_us = esp_timer_get_time();
     auto log_cost = [start_time_us]() {
         auto cost_ms = (esp_timer_get_time() - start_time_us) / 1000;
@@ -50,7 +50,7 @@ bool WakeArbiterClient::RequestSession(const std::string& wake_word) {
     http->SetHeader("Content-Type", "application/json");
     http->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
     http->SetHeader("Client-Id", Board::GetInstance().GetUuid());
-    http->SetContent(BuildWakeDetectedPayload(wake_word));
+    http->SetContent(BuildWakeDetectedPayload(wake_word, wake_rms_dbfs));
 
     if (!http->Open("POST", url)) {
         ESP_LOGE(TAG, "Failed to open wake arbitration request: %s", url.c_str());
@@ -122,7 +122,7 @@ std::string WakeArbiterClient::BuildEndpointUrl(const std::string& path) const {
     return gateway_url + path;
 }
 
-std::string WakeArbiterClient::BuildWakeDetectedPayload(const std::string& wake_word) const {
+std::string WakeArbiterClient::BuildWakeDetectedPayload(const std::string& wake_word, float wake_rms_dbfs) const {
     cJSON* payload = cJSON_CreateObject();
     if (payload == nullptr) {
         return "{}";
@@ -131,6 +131,7 @@ std::string WakeArbiterClient::BuildWakeDetectedPayload(const std::string& wake_
     cJSON_AddStringToObject(payload, "device_id", SystemInfo::GetMacAddress().c_str());
     cJSON_AddStringToObject(payload, "client_id", Board::GetInstance().GetUuid().c_str());
     cJSON_AddStringToObject(payload, "wake_word", wake_word.c_str());
+    cJSON_AddNumberToObject(payload, "wake_rms_dbfs", wake_rms_dbfs);
 
     auto json_str = cJSON_PrintUnformatted(payload);
     std::string json = "{}";

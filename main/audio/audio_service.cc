@@ -1,6 +1,7 @@
 #include "audio_service.h"
 #include <esp_log.h>
 #include <cstring>
+#include <limits>
 
 #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)        \
     (esp_ae_rate_cvt_cfg_t)                                  \
@@ -536,6 +537,13 @@ void AudioService::EncodeWakeWord() {
 
 const std::string& AudioService::GetLastWakeWord() const {
     return wake_word_->GetLastDetectedWakeWord();
+}
+
+float AudioService::GetLastWakeRmsDbfs() const {
+    if (!wake_word_) {
+        return std::numeric_limits<float>::quiet_NaN();
+    }
+    return wake_word_->GetLastWakeRmsDbfs();
 }
 
 std::unique_ptr<AudioStreamPacket> AudioService::PopWakeWordPacket() {

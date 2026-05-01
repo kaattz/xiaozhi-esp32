@@ -14,6 +14,7 @@
 #include "announcement_audio_client.h"
 
 #include <cstring>
+#include <cmath>
 #include <esp_log.h>
 #include <cJSON.h>
 #include <driver/gpio.h>
@@ -816,11 +817,17 @@ void Application::HandleWakeWordDetectedEvent() {
     ESP_LOGI(TAG, "Wake word detected: %s (state: %d)", wake_word.c_str(), (int)state);
 
     if (state == kDeviceStateIdle) {
+        auto wake_rms_dbfs = audio_service_.GetLastWakeRmsDbfs();
+        if (IsWakeArbitrationEnabled() && !std::isfinite(wake_rms_dbfs)) {
+            ESP_LOGE(TAG, "Invalid wake_rms_dbfs, skip wake arbitration request");
+            audio_service_.EnableWakeWordDetection(true);
+            return;
+        }
         audio_service_.EncodeWakeWord();
         auto wake_word = audio_service_.GetLastWakeWord();
 
-        Schedule([this, wake_word]() {
-            ContinueWakeWordArbitration(wake_word);
+        Schedule([this, wake_word, wake_rms_dbfs]() {
+            ContinueWakeWordArbitration(wake_word, wake_rms_dbfs);
         });
     } else if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
         AbortSpeaking(kAbortReasonWakeWordDetected);
@@ -844,7 +851,7 @@ void Application::HandleWakeWordDetectedEvent() {
     }
 }
 
-void Application::ContinueWakeWordArbitration(const std::string& wake_word) {
+void Application::ContinueWakeWordArbitration(const std::string& wake_word, float wake_rms_dbfs) {
     // Check state again in case it was changed during scheduling
     if (GetDeviceState() != kDeviceStateIdle) {
         return;
@@ -858,7 +865,13 @@ void Application::ContinueWakeWordArbitration(const std::string& wake_word) {
     }
 
     WakeArbiterClient arbiter;
-    if (!arbiter.RequestSession(wake_word)) {
+    if (!std::isfinite(wake_rms_dbfs)) {
+        ESP_LOGE(TAG, "Invalid wake_rms_dbfs, reject wake arbitration request");
+        wake_arbitration_session_active_ = false;
+        audio_service_.EnableWakeWordDetection(true);
+        return;
+    }
+    if (!arbiter.RequestSession(wake_word, wake_rms_dbfs)) {
         wake_arbitration_session_active_ = false;
         audio_service_.EnableWakeWordDetection(true);
         return;
@@ -916,9 +929,6 @@ void Application::EndWakeArbitrationSession() {
 void Application::HandleStateChangedEvent() {
     DeviceState new_state = state_machine_.GetState();
     clock_ticks_ = 0;
-    if (new_state != kDeviceStateListening) {
-        ++announcement_listen_token_;
-    }
 
     HomeAssistantManager::GetInstance().PublishDeviceState(DeviceStateMachine::GetStateName(new_state));
 
@@ -1115,12 +1125,12 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
     }
 }
 
-void Application::PlayRemoteAnnouncement(const std::string& text, AnnouncementMode mode) {
+void Application::PlayRemoteAnnouncement(const std::string& text) {
     if (text.empty()) {
         return;
     }
 
-    Schedule([this, text, mode]() {
+    Schedule([this, text]() {
         auto state = GetDeviceState();
         if (state == kDeviceStateSpeaking) {
             ESP_LOGW(TAG, "Ignore announcement while device is speaking");
@@ -1133,7 +1143,7 @@ void Application::PlayRemoteAnnouncement(const std::string& text, AnnouncementMo
 
         AnnouncementAudioFrames audio;
         AnnouncementAudioClient client;
-        if (!client.FetchFrames(text, mode, audio) || audio.frames.empty()) {
+        if (!client.FetchFrames(text, audio) || audio.frames.empty()) {
             ESP_LOGE(TAG, "Failed to fetch announcement audio");
             return;
         }
@@ -1158,74 +1168,8 @@ void Application::PlayRemoteAnnouncement(const std::string& text, AnnouncementMo
 
         audio_service_.WaitForPlaybackQueueEmpty();
         vTaskDelay(pdMS_TO_TICKS(audio.frame_duration_ms));
-        if (mode == kAnnouncementModeQuestion && audio.listen_after_playback) {
-            if (protocol_ == nullptr) {
-                ESP_LOGE(TAG, "Protocol not initialized for question announcement listening");
-                SetDeviceState(kDeviceStateIdle);
-                return;
-            }
-            if (!protocol_->IsAudioChannelOpened() && !protocol_->OpenAudioChannel()) {
-                ESP_LOGE(TAG, "Failed to open audio channel for question announcement");
-                SetDeviceState(kDeviceStateIdle);
-                return;
-            }
-            if (audio.listen_timeout_seconds <= 0) {
-                ESP_LOGE(TAG, "Invalid question announcement listen timeout");
-                protocol_->CloseAudioChannel();
-                SetDeviceState(kDeviceStateIdle);
-                return;
-            }
-            auto listen_token = ++announcement_listen_token_;
-            SetListeningMode(kListeningModeAutoStop);
-            StartAnnouncementListenTimeout(audio.listen_timeout_seconds, listen_token);
-            return;
-        }
         SetDeviceState(kDeviceStateIdle);
     });
-}
-
-void Application::StartAnnouncementListenTimeout(int timeout_seconds, uint32_t listen_token) {
-    if (timeout_seconds <= 0) {
-        return;
-    }
-
-    struct TimeoutContext {
-        Application* app;
-        int timeout_seconds;
-        uint32_t listen_token;
-    };
-
-    auto context = new TimeoutContext{this, timeout_seconds, listen_token};
-    auto task_created = xTaskCreate([](void* arg) {
-        auto context = static_cast<TimeoutContext*>(arg);
-        vTaskDelay(pdMS_TO_TICKS(context->timeout_seconds * 1000));
-        auto app = context->app;
-        auto listen_token = context->listen_token;
-        delete context;
-
-        app->Schedule([app, listen_token]() {
-            if (app->announcement_listen_token_ != listen_token) {
-                return;
-            }
-            if (app->GetDeviceState() != kDeviceStateListening) {
-                return;
-            }
-            if (app->protocol_ != nullptr && app->protocol_->IsAudioChannelOpened()) {
-                app->protocol_->CloseAudioChannel();
-            }
-            app->SetDeviceState(kDeviceStateIdle);
-        });
-        vTaskDelete(NULL);
-    }, "ann_listen_timeout", 4096, context, 1, nullptr);
-    if (task_created != pdPASS) {
-        delete context;
-        ++announcement_listen_token_;
-        ESP_LOGE(TAG, "Failed to create announcement listen timeout task");
-        if (protocol_ != nullptr && protocol_->IsAudioChannelOpened()) {
-            protocol_->CloseAudioChannel();
-        }
-        SetDeviceState(kDeviceStateIdle);
-    }
 }
 
 bool Application::CanEnterSleepMode() {

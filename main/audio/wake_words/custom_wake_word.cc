@@ -8,8 +8,37 @@
 #include <esp_mn_models.h>
 #include <esp_mn_speech_commands.h>
 #include <cJSON.h>
+#include <cmath>
+#include <limits>
 
 #define TAG "CustomWakeWord"
+
+namespace {
+float CalculateRmsDbfs(const std::deque<std::vector<int16_t>>& wake_word_pcm) {
+    double sum_squares = 0.0;
+    size_t sample_count = 0;
+    for (const auto& pcm : wake_word_pcm) {
+        for (auto sample : pcm) {
+            auto value = static_cast<double>(sample);
+            sum_squares += value * value;
+        }
+        sample_count += pcm.size();
+    }
+
+    if (sample_count == 0) {
+        return std::numeric_limits<float>::quiet_NaN();
+    }
+
+    auto rms = std::sqrt(sum_squares / sample_count);
+    if (!std::isfinite(rms)) {
+        return std::numeric_limits<float>::quiet_NaN();
+    }
+    if (rms < 1.0) {
+        rms = 1.0;
+    }
+    return static_cast<float>(20.0 * std::log10(rms / 32768.0));
+}
+}
 
 CustomWakeWord::CustomWakeWord()
     : wake_word_pcm_(), wake_word_opus_() {
@@ -207,12 +236,18 @@ size_t CustomWakeWord::GetFeedSize() {
 }
 
 void CustomWakeWord::StoreWakeWordData(const std::vector<int16_t>& data) {
+    std::lock_guard<std::mutex> lock(wake_word_mutex_);
     // store audio data to wake_word_pcm_
     wake_word_pcm_.push_back(data);
     // keep about 2 seconds of data, detect duration is 30ms (sample_rate == 16000, chunksize == 512)
     while (wake_word_pcm_.size() > 2000 / 30) {
         wake_word_pcm_.pop_front();
     }
+}
+
+float CustomWakeWord::GetLastWakeRmsDbfs() const {
+    std::lock_guard<std::mutex> lock(wake_word_mutex_);
+    return CalculateRmsDbfs(wake_word_pcm_);
 }
 
 void CustomWakeWord::EncodeWakeWordData() {

@@ -37,7 +37,6 @@ public:
     HaEntityString* GetUserMessageEntity();
     HaEntityString* GetAssistantMessageEntity();
     HaEntityText* GetAnnouncementEntity();
-    HaEntityText* GetQuestionEntity();
     HaEntityNumber* GetBrightnessEntity();
     HaEntityNumber* GetVolumeEntity();
 
@@ -62,7 +61,6 @@ private:
     std::unique_ptr<HaEntityString> user_message_;
     std::unique_ptr<HaEntityString> assistant_message_;
     std::unique_ptr<HaEntityText> announcement_;
-    std::unique_ptr<HaEntityText> question_;
     std::unique_ptr<HaEntityNumber> brightness_;
     std::unique_ptr<HaEntityNumber> volume_;
 };

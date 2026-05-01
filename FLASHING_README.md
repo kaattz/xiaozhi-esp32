@@ -231,6 +231,8 @@ Wake arbitration cost: xxx ms
 | 启用自动固件升级 | 关闭 | 关闭时仍检查 OTA 配置，但不自动刷固件 |
 | 启用 Wake Arbitration | 关闭 | 关闭时直接走原始小智云端流程 |
 
+Wake Arbitration 只向 gateway 上报 `device_id`、`client_id`、`wake_word` 和 `wake_rms_dbfs`，不上传唤醒音频。`wake_rms_dbfs` 是本地从唤醒 PCM 或滚动 RMS 统计计算出的 dBFS 值，用于 gateway 在同组设备间选择离用户更近的一台。
+
 ## 10. 常见问题
 
 | 问题 | 处理 |
@@ -239,4 +241,5 @@ Wake arbitration cost: xxx ms
 | `esptool.py` 连不上 | 检查串口号；必要时按住 BOOT 再复位进入下载模式 |
 | 唤醒没反应 | 先看日志有没有 `Wake word detected`；没有则检查 I2S Type STD/PDM |
 | 唤醒后不进入会话 | 先确认网页里 `启用 Wake Arbitration` 是否关闭；如果开启，确认 gateway 是否可访问 |
+| 多台设备同时回复 | 确认 gateway `devices.yaml` 是否把容易串音的设备放进同一个 `wake_group`，并按设备麦克风差异调整 `mic_gain_offset_db` |
 | 刷错配置 | 可以重新执行 `menuconfig`、`build`、`flash` 重刷 |

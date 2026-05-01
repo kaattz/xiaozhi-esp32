@@ -9,6 +9,7 @@
 #include <vector>
 #include <functional>
 #include <atomic>
+#include <deque>
 #include <mutex>
 
 #include "audio_codec.h"
@@ -28,8 +29,14 @@ public:
     void EncodeWakeWordData();
     bool GetWakeWordOpus(std::vector<uint8_t>& opus);
     const std::string& GetLastDetectedWakeWord() const { return last_detected_wake_word_; }
+    float GetLastWakeRmsDbfs() const;
 
 private:
+    struct RmsWindowChunk {
+        double sum_squares = 0.0;
+        size_t sample_count = 0;
+    };
+
     esp_wn_iface_t *wakenet_iface_ = nullptr;
     model_iface_data_t *wakenet_data_ = nullptr;
     srmodel_list_t *wakenet_model_ = nullptr;
@@ -39,7 +46,13 @@ private:
     std::function<void(const std::string& wake_word)> wake_word_detected_callback_;
     std::string last_detected_wake_word_;
     std::vector<int16_t> input_buffer_;
-    std::mutex input_buffer_mutex_;
+    mutable std::mutex input_buffer_mutex_;
+    std::deque<RmsWindowChunk> wake_rms_chunks_;
+    double wake_rms_sum_squares_ = 0.0;
+    size_t wake_rms_sample_count_ = 0;
+
+    void ResetWakeRmsLocked();
+    void AddWakeRmsSamplesLocked(const int16_t* data, size_t sample_count);
 };
 
 #endif
