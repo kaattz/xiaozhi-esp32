@@ -140,8 +140,7 @@ Xiaozhi Assistant -> Board Type -> Movecall Moji 小智AI衍生版
 
 | 配置项 | 建议值 |
 |---|---|
-| Serial flasher config -> Flash size | 8 MB |
-| Partition Table -> Custom partition CSV file | partitions/v2/8m.csv |
+| Serial flasher config -> Flash size | 16 MB |
 | Wake Word Implementation Type | Wakenet model with AFE |
 
 如果屏幕、麦克风或按键异常，先确认卖家给的板型是否确实是 `Movecall Moji 小智AI衍生版`，不要改选 `ESP-BOX-3`。
@@ -177,7 +176,7 @@ idf.py -p COM3 flash
 
 如果串口不是 `COM3`，替换成你的实际串口。
 
-也可以用 ESP-IDF 输出的完整 `esptool` 命令烧录 16MB Flash。下面这条只适用于 16MB Flash 的板子，8MB 的 Movecall Moji 不要用这条，直接用 `idf.py -p COM3 flash`：
+也可以用 ESP-IDF 输出的完整 `esptool` 命令烧录 16MB Flash。下面这条只适用于 16MB Flash 的板子，8MB 的板子不要用这条，直接用 `idf.py -p COM3 flash`：
 
 ```powershell
 python -m esptool --chip esp32s3 -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 build\bootloader\bootloader.bin 0x8000 build\partition_table\partition-table.bin 0xd000 build\ota_data_initial.bin 0x20000 build\xiaozhi.bin 0x800000 build\generated_assets.bin
