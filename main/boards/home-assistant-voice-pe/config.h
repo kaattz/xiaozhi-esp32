@@ -23,6 +23,20 @@
 #define VOICE_PE_SPK_DOUT_GPIO          GPIO_NUM_10
 #define VOICE_PE_AMP_ENABLE_GPIO        GPIO_NUM_47
 
+#define VOICE_PE_LED_DATA_GPIO          GPIO_NUM_21
+#define VOICE_PE_LED_POWER_GPIO         GPIO_NUM_45
+#define VOICE_PE_LED_COUNT              12
+
+#define VOICE_PE_MUTE_GPIO              GPIO_NUM_3
+#define VOICE_PE_MUTE_ACTIVE_LEVEL      1
+
+#define VOICE_PE_ENCODER_A_GPIO         GPIO_NUM_16
+#define VOICE_PE_ENCODER_B_GPIO         GPIO_NUM_18
+#define VOICE_PE_VOLUME_STEP            10
+
+#define VOICE_PE_JACK_DETECT_GPIO       GPIO_NUM_17
+#define VOICE_PE_JACK_INSERTED_LEVEL    1
+
 #define BOOT_BUTTON_GPIO                GPIO_NUM_0
 #define BUILTIN_LED_GPIO                GPIO_NUM_NC
 

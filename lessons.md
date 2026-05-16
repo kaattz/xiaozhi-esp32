@@ -7,3 +7,10 @@
 - 发布 HACS 集成版本时，只提交代码和推送 tag 不够；如果仓库使用 `zip_release`，必须同时基于该 tag 创建 GitHub Release 并上传 `ha-mcp-for-xiaozhi.zip`，否则 HACS 不会识别到新版本。
 - 用户命令已显式包含房间（例如“打开客厅吊灯”）时，HA MCP 工具必须把房间作为正式工具参数传递，不能依赖 gateway active context；否则无 active context 时会直接失败。
 - 用户指出早期自动补房间实现工作正常时，必须先用提交历史核对行为分界点；不要只按当前代码推断。`ha-mcp-for-xiaozhi` 早期方案曾把 `room_id`、`room_name`、`ha_area_id` 注入 `LLMContext.context`，后续提交才改为保留原始 HA context 并主要依赖 `device_id`/`preferred_area_id`。
+- 写硬件适配需求文档时，控制总线、健康检查总线、初始化时序、RMS 判定口径、WiFi/NVS 复用和分区表存在性必须显式写清楚，不能留给实现阶段猜。
+- 写音频硬件适配文档时，必须钉死采样率转换责任边界、32-bit 到 16-bit PCM 转换方式、外部寄存器序列的具体 commit，以及硬件启动超时/重试策略。
+- 写硬件实施计划时，音频输入、音频输出、codec 集成要拆成独立验证步骤；外部资料取证必须有本地产出物；硬件验证失败必须暂停并更新 Spec，不能边猜边继续。
+- 当评审指出文档“没有说明”但内容已存在时，不能只说已写；要把约束改得更显眼，补代码责任边界和源码路径，避免实施时读错。
+- Voice PE 麦克风实测：XMOS `channel1=NS` 比 `channel0=AGC` 底噪低；24 倍固定增益主观音量够用，48 倍没有明显更响但底噪更大，第一阶段固定 24 倍。
+- 用户的 `kaattz/xiaozhi-esp32` 是自己的目标仓库时，不要默认建议向 `78/xiaozhi-esp32` 提 PR；应先确认是 fork 贡献上游，还是只在用户自己的仓库合并发布。
+- 写 Voice PE 交互类硬件需求时，必须显式定义 mute 在 speaking 状态下是否中断 TTS、物理开关 debounce 策略、非主线程硬件回调是否需要调度到主任务，以及复杂硬件任务是否要拆成 GPIO 探测和行为接入两步。
