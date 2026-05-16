@@ -176,6 +176,9 @@ choice BOARD_TYPE
     config BOARD_TYPE_ESP_BOX_3
         bool "Espressif ESP-BOX-3"
         depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_HOME_ASSISTANT_VOICE_PE
+        bool "Home Assistant Voice Preview Edition"
+        depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_ESP_BOX
         bool "Espressif ESP-BOX"
         depends on IDF_TARGET_ESP32S3

@@ -1,0 +1,29 @@
+#ifndef _BOARD_CONFIG_H_
+#define _BOARD_CONFIG_H_
+
+#include <driver/gpio.h>
+
+#define AUDIO_INPUT_SAMPLE_RATE  16000
+#define AUDIO_OUTPUT_SAMPLE_RATE 48000
+#define AUDIO_INPUT_REFERENCE    false
+
+#define VOICE_PE_INTERNAL_I2C_PORT      1
+#define VOICE_PE_INTERNAL_I2C_SDA_GPIO  GPIO_NUM_5
+#define VOICE_PE_INTERNAL_I2C_SCL_GPIO  GPIO_NUM_6
+#define VOICE_PE_XMOS_I2C_ADDR          0x42
+#define VOICE_PE_XMOS_RESET_GPIO        GPIO_NUM_4
+#define VOICE_PE_AIC3204_I2C_ADDR       0x18
+
+#define VOICE_PE_MIC_BCLK_GPIO          GPIO_NUM_13
+#define VOICE_PE_MIC_LRCLK_GPIO         GPIO_NUM_14
+#define VOICE_PE_MIC_DIN_GPIO           GPIO_NUM_15
+
+#define VOICE_PE_SPK_BCLK_GPIO          GPIO_NUM_8
+#define VOICE_PE_SPK_LRCLK_GPIO         GPIO_NUM_7
+#define VOICE_PE_SPK_DOUT_GPIO          GPIO_NUM_10
+#define VOICE_PE_AMP_ENABLE_GPIO        GPIO_NUM_47
+
+#define BOOT_BUTTON_GPIO                GPIO_NUM_0
+#define BUILTIN_LED_GPIO                GPIO_NUM_NC
+
+#endif // _BOARD_CONFIG_H_
