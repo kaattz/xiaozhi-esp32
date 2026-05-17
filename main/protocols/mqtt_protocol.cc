@@ -256,12 +256,30 @@ bool MqttProtocol::OpenAudioChannel() {
         }
         uint32_t timestamp = ntohl(*(uint32_t*)&data[8]);
         uint32_t sequence = ntohl(*(uint32_t*)&data[12]);
-        if (sequence < remote_sequence_) {
+        if (sequence <= remote_sequence_) {
             ESP_LOGW(TAG, "Received audio packet with old sequence: %lu, expected: %lu", sequence, remote_sequence_);
             return;
         }
-        if (sequence != remote_sequence_ + 1) {
+        if (sequence > remote_sequence_ + 1) {
             ESP_LOGW(TAG, "Received audio packet with wrong sequence: %lu, expected: %lu", sequence, remote_sequence_ + 1);
+            auto missing_count = sequence - remote_sequence_ - 1;
+            for (uint32_t i = 0; i < missing_count; ++i) {
+                auto missing_sequence = remote_sequence_ + 1 + i;
+                auto missing = std::make_unique<AudioStreamPacket>();
+                missing->sample_rate = server_sample_rate_;
+                missing->frame_duration = server_frame_duration_;
+                missing->timestamp = timestamp - (sequence - missing_sequence) * server_frame_duration_;
+                missing->sequence = missing_sequence;
+                missing->loss_concealment = true;
+                ESP_LOGW(TAG, "Insert PLC audio packet: seq=%lu ts=%lu sr=%d frame=%d",
+                    static_cast<unsigned long>(missing_sequence),
+                    static_cast<unsigned long>(missing->timestamp),
+                    server_sample_rate_,
+                    server_frame_duration_);
+                if (on_incoming_audio_ != nullptr) {
+                    on_incoming_audio_(std::move(missing));
+                }
+            }
         }
 
         size_t decrypted_size = data.size() - aes_nonce_.size();
@@ -273,12 +291,19 @@ bool MqttProtocol::OpenAudioChannel() {
         packet->sample_rate = server_sample_rate_;
         packet->frame_duration = server_frame_duration_;
         packet->timestamp = timestamp;
+        packet->sequence = sequence;
         packet->payload.resize(decrypted_size);
         int ret = mbedtls_aes_crypt_ctr(&aes_ctx_, decrypted_size, &nc_off, nonce, stream_block, encrypted, (uint8_t*)packet->payload.data());
         if (ret != 0) {
             ESP_LOGE(TAG, "Failed to decrypt audio data, ret: %d", ret);
             return;
         }
+        ESP_LOGD(TAG, "UDP audio in: seq=%lu ts=%lu bytes=%u sr=%d frame=%d",
+            static_cast<unsigned long>(sequence),
+            static_cast<unsigned long>(timestamp),
+            static_cast<unsigned>(decrypted_size),
+            server_sample_rate_,
+            server_frame_duration_);
         if (on_incoming_audio_ != nullptr) {
             on_incoming_audio_(std::move(packet));
         }

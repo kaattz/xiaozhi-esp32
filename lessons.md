@@ -36,3 +36,21 @@
 - Voice PE/listening 允许接收迟到 TTS 后，进入 speaking 状态时不能再调用会清空 decode/playback queue 的 `ResetDecoder()`；TTS 音频包可能先于 `tts start` JSON 到达，清队列会造成只播一个字或回复截断。
 - Voice PE/listening 允许接收迟到 TTS 后，`EnableVoiceProcessing(true)` 也不能隐式 `ResetDecoder()`；否则刚进入 listening 时接收的迟到 TTS 音频会在启动收音处理时被清掉，表现为显示完整但实际少播后半句。
 - Voice PE 排查日志里连续出现 `>> 你好小智/你好小志` 时，必须先和用户确认哪些是人工重复触发；不能直接推断为回声或残留音频误识别。
+- Voice PE 的 `i2s_channel_write`/`OutputData()` 返回只说明 PCM 已写入/排队，不代表扬声器声学播放已经结束；播放尾音保护必须把 PCM 时长算进去，再叠加尾音窗口，否则短回复会在显示已回 listening 后被自己的 TTS 重新识别成用户语音。
+- Voice PE 用户明确说只喊了一次唤醒词、TTS 只出第一个字时，不能继续按“用户第二句/回声”方向排查；应先检查 TTS 音频包入口、decode/playback 队列和 `listen/start` 是否过早重开导致服务端截断剩余 TTS。
+- Voice PE 语音链路连续修复仍复现时，下一步必须先加边界日志：服务端 UDP 音频包、Application 接收/丢弃、decode 队列、PCM 输出、I2S 写入、`tts stop` drain、`listen/start`，不能继续凭主观听感改参数。
+- Voice PE 日志若出现 `TTS stop` 早于首个 `UDP audio in`，根因是状态机把早到的 stop 当成播放结束并提前发下一轮 `listen/start`；修复应等待本轮 TTS 至少收到首个音频包并 drain，而不是继续加播放尾音参数。
+- Voice PE 已经等待完 TTS drain 但新句开头有噪音/像截断时，不能再改 listen/drain 参数；应检查段间 Opus decoder 和 output resampler 是否复用旧状态。修复要只重置解码状态，不能调用会清空 decode/playback 队列的 `ResetDecoder()`。
+- Voice PE 日志出现 `wrong sequence` 或连续 UDP 包到达间隔大于一帧时，开头噪音优先按网络抖动/丢包处理：播放端需要小 jitter buffer，明确丢包要用 Opus PLC 补帧，不能继续归因到 AEC、decoder reset 或用户回声。
+- Voice PE 排查音频丢包/截断时，逐 UDP 包、逐 decode 帧、逐 I2S write 的 INFO 日志会在 115200 串口下反过来制造阻塞、丢包和播放断流；这类日志必须默认 DEBUG，只保留 `wrong sequence`、queue full、TTS 边界等低频 INFO/WARN。
+- Voice PE 用户只反馈“第二次截断”但没有贴第二次完整日志时，不能按第一次正常日志推断根因；TTS stop/drain 必须打印本句包数和音频毫秒数，用事实区分服务端短音频、本地丢包和播放未 drain。
+- 用户明确指出“这条日志就是第二次日志”时，必须立即纠正前一次判断；不能因为日志里没有显式“第二次”标签就否定用户提供的上下文。
+- Voice PE TTS 截断排查的汇总日志必须带文本、包数、音频毫秒、seq 范围、seq gap、PLC 包数和 timestamp 范围；只看 count delta/audio_ms 仍然不够区分“服务端短音频”和“中间丢包/补帧”。
+- Voice PE 同一设备切到 WebSocket 后三次 TTS 都不截断，且 `audio_ms` 变为 3120/3600ms，说明本地 decode/playback/drain 和服务端 TTS 生成不是主因；截断集中在 MQTT+UDP 音频路径，正式策略应让 Voice PE 优先 WebSocket、MQTT 只作回退。
+- Voice PE 连续 TTS 场景下 `ResetDecoderState()` 因队列/active playback 非空而跳过是正常保护，不应使用 WARN；这类日志应放在 DEBUG，避免误判为异常。
+- Voice PE 的 `playback_buffering_` 是单轮 TTS 状态；drain 返回、service stop 和 `ResetDecoder()` 必须显式清理 min_frames、timeout 和 started_at，避免无音频/异常路径污染下一轮播放。
+- Voice PE WebSocket 下 TTS 已稳定后，播放尾音保护只应覆盖硬件/声学余尾；`last_output_time_` 已包含 PCM 播放时长，过长 tail guard 会让用户抢话开头被截掉。
+- Voice PE 优先 WebSocket 后，TTS `decode idle guard` 不再需要按 MQTT/UDP 的迟到包风险保守到 240ms；可先压到两个 Opus 帧 120ms，降低 speaking -> listening 的体感延迟。
+- Voice PE 实测用户抢话开头不丢后，`playback tail guard` 可从 300ms 继续试压到 200ms；这项仍是本机播放/AEC尾音保护，不是 MQTT/UDP 传输保护。
+- Voice PE LED 场景应参考官方语义：红色保留给错误/未就绪/静音/恢复出厂；配网用暖白；listening 用绿色慢速旋转，speaking 用蓝青色快速旋转。
+- Voice PE 静音 LED 应和官方场景对齐：麦克风 muted 用局部红点位 3/9，音量 silent 用局部红点位 6，错误告警才使用整圈红色闪烁。

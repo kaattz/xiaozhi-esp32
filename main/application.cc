@@ -518,6 +518,18 @@ void Application::InitializeProtocol() {
 
     display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
 
+#if CONFIG_BOARD_TYPE_HOME_ASSISTANT_VOICE_PE
+    if (ota_->HasWebsocketConfig()) {
+        ESP_LOGI(TAG, "Voice PE: using WebSocket protocol");
+        protocol_ = std::make_unique<WebsocketProtocol>();
+    } else if (ota_->HasMqttConfig()) {
+        ESP_LOGW(TAG, "Voice PE: WebSocket config unavailable, using MQTT protocol");
+        protocol_ = std::make_unique<MqttProtocol>();
+    } else {
+        ESP_LOGW(TAG, "No protocol specified in the OTA config, using MQTT");
+        protocol_ = std::make_unique<MqttProtocol>();
+    }
+#else
     if (ota_->HasMqttConfig()) {
         protocol_ = std::make_unique<MqttProtocol>();
     } else if (ota_->HasWebsocketConfig()) {
@@ -526,6 +538,7 @@ void Application::InitializeProtocol() {
         ESP_LOGW(TAG, "No protocol specified in the OTA config, using MQTT");
         protocol_ = std::make_unique<MqttProtocol>();
     }
+#endif
 
     protocol_->OnConnected([this]() {
         DismissAlert();
@@ -539,7 +552,18 @@ void Application::InitializeProtocol() {
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
         auto state = GetDeviceState();
         if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
+            ESP_LOGD(TAG, "Incoming audio accepted: state=%s ts=%lu bytes=%u sr=%d frame=%d",
+                DeviceStateMachine::GetStateName(state),
+                static_cast<unsigned long>(packet->timestamp),
+                static_cast<unsigned>(packet->payload.size()),
+                packet->sample_rate,
+                packet->frame_duration);
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
+        } else {
+            ESP_LOGW(TAG, "Incoming audio dropped: state=%s ts=%lu bytes=%u",
+                DeviceStateMachine::GetStateName(state),
+                static_cast<unsigned long>(packet->timestamp),
+                static_cast<unsigned>(packet->payload.size()));
         }
     });
     
@@ -569,12 +593,51 @@ void Application::InitializeProtocol() {
             if (strcmp(state->valuestring, "start") == 0) {
                 Schedule([this]() {
                     aborted_ = false;
+                    current_tts_text_.clear();
+                    tts_start_decode_packet_count_ = audio_service_.GetDecodePacketCount();
+                    ESP_LOGI(TAG, "TTS start: decode_count=%lu",
+                        static_cast<unsigned long>(tts_start_decode_packet_count_));
+                    audio_service_.ResetDecoderState();
+                    if (!Board::GetInstance().ShouldUploadAudioDuringSpeaking()) {
+                        audio_service_.BeginPlaybackBuffering(kDefaultPlaybackBufferFrames,
+                            kDefaultPlaybackBufferTimeoutMs);
+                    }
                     SetDeviceState(kDeviceStateSpeaking);
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
                 Schedule([this]() {
+                    ESP_LOGI(TAG, "TTS stop received: state=%s",
+                        DeviceStateMachine::GetStateName(GetDeviceState()));
                     if (GetDeviceState() == kDeviceStateSpeaking) {
-                        audio_service_.WaitForPlaybackQueueEmpty();
+                        bool wait_for_first_tts_audio = !Board::GetInstance().ShouldUploadAudioDuringSpeaking();
+                        auto tts_stop_summary = audio_service_.GetDecodePacketSummarySince(tts_start_decode_packet_count_);
+                        ESP_LOGI(TAG, "TTS drain begin: wait_first_audio=%d start_decode_count=%lu",
+                            wait_for_first_tts_audio ? 1 : 0,
+                            static_cast<unsigned long>(tts_start_decode_packet_count_));
+                        ESP_LOGI(TAG, "TTS audio before stop: text=\"%s\" packets=%lu audio_ms=%lu seq=%lu..%lu gaps=%lu plc=%lu ts=%lu..%lu",
+                            current_tts_text_.c_str(),
+                            static_cast<unsigned long>(tts_stop_summary.packets),
+                            static_cast<unsigned long>(tts_stop_summary.audio_ms),
+                            static_cast<unsigned long>(tts_stop_summary.first_sequence),
+                            static_cast<unsigned long>(tts_stop_summary.last_sequence),
+                            static_cast<unsigned long>(tts_stop_summary.sequence_gaps),
+                            static_cast<unsigned long>(tts_stop_summary.plc_packets),
+                            static_cast<unsigned long>(tts_stop_summary.first_timestamp),
+                            static_cast<unsigned long>(tts_stop_summary.last_timestamp));
+                        audio_service_.WaitForPlaybackQueueEmpty(
+                            wait_for_first_tts_audio ? tts_start_decode_packet_count_ : 0,
+                            wait_for_first_tts_audio ? 5000 : 0);
+                        auto tts_end_summary = audio_service_.GetDecodePacketSummarySince(tts_start_decode_packet_count_);
+                        ESP_LOGI(TAG, "TTS drain complete: text=\"%s\" packets=%lu audio_ms=%lu seq=%lu..%lu gaps=%lu plc=%lu ts=%lu..%lu",
+                            current_tts_text_.c_str(),
+                            static_cast<unsigned long>(tts_end_summary.packets),
+                            static_cast<unsigned long>(tts_end_summary.audio_ms),
+                            static_cast<unsigned long>(tts_end_summary.first_sequence),
+                            static_cast<unsigned long>(tts_end_summary.last_sequence),
+                            static_cast<unsigned long>(tts_end_summary.sequence_gaps),
+                            static_cast<unsigned long>(tts_end_summary.plc_packets),
+                            static_cast<unsigned long>(tts_end_summary.first_timestamp),
+                            static_cast<unsigned long>(tts_end_summary.last_timestamp));
                         if (!Board::GetInstance().ShouldUploadAudioDuringSpeaking()) {
                             audio_service_.ResetVoiceProcessor();
                             audio_service_.ClearUploadQueues();
@@ -591,7 +654,11 @@ void Application::InitializeProtocol() {
                 if (cJSON_IsString(text)) {
                     ESP_LOGI(TAG, "<< %s", text->valuestring);
                     HomeAssistantManager::GetInstance().PublishAssistantMessage(text->valuestring);
-                    Schedule([display, message = std::string(text->valuestring)]() {
+                    Schedule([this, display, message = std::string(text->valuestring)]() {
+                        if (!current_tts_text_.empty()) {
+                            current_tts_text_ += " ";
+                        }
+                        current_tts_text_ += message;
                         display->SetChatMessage("assistant", message.c_str());
                     });
                 }
@@ -691,16 +758,20 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
 
 void Application::Alert(const char* status, const char* message, const char* emotion, const std::string_view& sound) {
     ESP_LOGW(TAG, "Alert [%s] %s: %s", emotion, status, message);
+    error_alert_active_ = strcmp(status, Lang::Strings::ERROR) == 0;
     auto display = Board::GetInstance().GetDisplay();
     display->SetStatus(status);
     display->SetEmotion(emotion);
     display->SetChatMessage("system", message);
+    Board::GetInstance().GetLed()->OnStateChanged();
     if (!sound.empty()) {
         audio_service_.PlaySound(sound);
     }
 }
 
 void Application::DismissAlert() {
+    error_alert_active_ = false;
+    Board::GetInstance().GetLed()->OnStateChanged();
     if (GetDeviceState() == kDeviceStateIdle) {
         auto display = Board::GetInstance().GetDisplay();
         display->SetStatus(Lang::Strings::STANDBY);
@@ -984,6 +1055,11 @@ void Application::HandleStateChangedEvent() {
                     audio_service_.WaitForPlaybackQueueEmpty();
                 }
 
+                ESP_LOGI(TAG, "Listening start command: mode=%d popup=%d processor_running=%d playback_work=%d",
+                    static_cast<int>(listening_mode_),
+                    play_popup_on_listening_ ? 1 : 0,
+                    audio_service_.IsAudioProcessorRunning() ? 1 : 0,
+                    audio_service_.HasPlaybackWork() ? 1 : 0);
                 protocol_->SendStartListening(listening_mode_);
                 audio_service_.EnableVoiceProcessing(true);
                 ESP_LOGI(TAG, "Listening started: mode=%d processor_running=%d",

@@ -66,6 +66,7 @@ public:
 
     DeviceState GetDeviceState() const { return state_machine_.GetState(); }
     bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
+    bool IsErrorAlertActive() const { return error_alert_active_; }
     
     /**
      * Request state transition
@@ -145,6 +146,9 @@ private:
     bool auto_firmware_upgrade_enabled_ = false;
     bool wake_arbitration_enabled_ = false;
     bool wake_arbitration_session_active_ = false;
+    bool error_alert_active_ = false;
+    uint32_t tts_start_decode_packet_count_ = 0;
+    std::string current_tts_text_;
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 

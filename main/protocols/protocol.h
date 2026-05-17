@@ -11,6 +11,8 @@ struct AudioStreamPacket {
     int sample_rate = 0;
     int frame_duration = 0;
     uint32_t timestamp = 0;
+    uint32_t sequence = 0;
+    bool loss_concealment = false;
     std::vector<uint8_t> payload;
 };
 

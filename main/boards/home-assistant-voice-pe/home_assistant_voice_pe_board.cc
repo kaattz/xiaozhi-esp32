@@ -191,6 +191,7 @@ private:
             } else if (state == kDeviceStateIdle || state == kDeviceStateSpeaking) {
                 audio_service.EnableWakeWordDetection(true);
             }
+            GetLed()->OnStateChanged();
         });
     }
 

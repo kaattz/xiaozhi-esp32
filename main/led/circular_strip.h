@@ -29,6 +29,7 @@ public:
     void Blink(StripColor color, int interval_ms);
     void Breathe(StripColor low, StripColor high, int interval_ms);
     void Scroll(StripColor low, StripColor high, int length, int interval_ms);
+    void ScrollReverse(StripColor low, StripColor high, int length, int interval_ms);
 
 private:
     std::mutex mutex_;
@@ -45,6 +46,7 @@ private:
     uint8_t low_brightness_ = LOW_BRIGHTNESS;
 
     void StartStripTask(int interval_ms, std::function<void()> cb);
+    void ShowMutedOrSilentIndicator(bool microphone_muted, bool speaker_silent);
     void Rainbow(StripColor low, StripColor high, int interval_ms);
     void FadeOut(int interval_ms);
 };

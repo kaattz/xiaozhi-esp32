@@ -38,14 +38,18 @@
 
 #define OPUS_FRAME_DURATION_MS 60
 #define MAX_ENCODE_TASKS_IN_QUEUE 2
-#define MAX_PLAYBACK_TASKS_IN_QUEUE 2
+#define MAX_PLAYBACK_TASKS_IN_QUEUE 6
 #define MAX_DECODE_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
 #define MAX_SEND_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
+#define MAX_DECODE_PACKET_HISTORY 512
 #define AUDIO_TESTING_MAX_DURATION_MS 10000
 #define MAX_TIMESTAMPS_IN_QUEUE 3
 
 #define AUDIO_POWER_TIMEOUT_MS 15000
 #define AUDIO_POWER_CHECK_INTERVAL_MS 1000
+
+constexpr size_t kDefaultPlaybackBufferFrames = 4;
+constexpr int kDefaultPlaybackBufferTimeoutMs = 240;
 
 #define AS_EVENT_AUDIO_TESTING_RUNNING      (1 << 0)
 #define AS_EVENT_WAKE_WORD_RUNNING          (1 << 1)
@@ -109,6 +113,25 @@ struct DebugStatistics {
     uint32_t send_fail_count = 0;
 };
 
+struct DecodePacketInfo {
+    uint32_t count = 0;
+    uint32_t timestamp = 0;
+    uint32_t sequence = 0;
+    int frame_duration = 0;
+    bool loss_concealment = false;
+};
+
+struct DecodePacketSummary {
+    uint32_t packets = 0;
+    uint32_t audio_ms = 0;
+    uint32_t plc_packets = 0;
+    uint32_t sequence_gaps = 0;
+    uint32_t first_sequence = 0;
+    uint32_t last_sequence = 0;
+    uint32_t first_timestamp = 0;
+    uint32_t last_timestamp = 0;
+};
+
 class AudioService {
 public:
     AudioService();
@@ -123,7 +146,9 @@ public:
     float GetLastWakeRmsDbfs() const;
     bool IsVoiceDetected() const { return voice_detected_; }
     bool IsIdle();
-    void WaitForPlaybackQueueEmpty();
+    void WaitForPlaybackQueueEmpty(uint32_t min_decode_packet_count = 0, int first_packet_timeout_ms = 0);
+    uint32_t GetDecodePacketCount();
+    DecodePacketSummary GetDecodePacketSummarySince(uint32_t start_count);
     bool HasPlaybackWork();
     bool IsWakeWordRunning() const { return xEventGroupGetBits(event_group_) & AS_EVENT_WAKE_WORD_RUNNING; }
     bool IsAudioProcessorRunning() const { return xEventGroupGetBits(event_group_) & AS_EVENT_AUDIO_PROCESSOR_RUNNING; }
@@ -144,6 +169,8 @@ public:
     void PlaySound(const std::string_view& sound);
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
     void ResetDecoder();
+    void ResetDecoderState();
+    void BeginPlaybackBuffering(size_t min_frames, int timeout_ms);
     void SetModelsList(srmodel_list_t* models_list);
 
 private:
@@ -183,6 +210,7 @@ private:
     std::deque<std::unique_ptr<AudioStreamPacket>> audio_testing_queue_;
     std::deque<std::unique_ptr<AudioTask>> audio_encode_queue_;
     std::deque<std::unique_ptr<AudioTask>> audio_playback_queue_;
+    std::deque<DecodePacketInfo> decode_packet_history_;
     // For server AEC
     std::deque<uint32_t> timestamp_queue_;
 
@@ -192,11 +220,19 @@ private:
     bool service_stopped_ = true;
     bool audio_input_need_warmup_ = false;
     bool playback_active_ = false;
+    bool decode_active_ = false;
+    bool playback_buffering_ = false;
+    size_t playback_buffer_min_frames_ = 0;
+    int playback_buffer_timeout_ms_ = 0;
+    bool decode_packet_seen_ = false;
+    uint32_t decode_packet_count_ = 0;
     int64_t last_voice_pipeline_probe_us_ = 0;
 
     esp_timer_handle_t audio_power_timer_ = nullptr;
     std::chrono::steady_clock::time_point last_input_time_;
     std::chrono::steady_clock::time_point last_output_time_;
+    std::chrono::steady_clock::time_point last_decode_packet_time_;
+    std::chrono::steady_clock::time_point playback_buffer_started_at_;
 
     void AudioInputTask();
     void AudioOutputTask();
@@ -204,6 +240,7 @@ private:
     void PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm, bool wait = true);
     void LogVoicePipelineProbe();
     bool IsPlaybackTailGuardActiveLocked() const;
+    bool IsDecodePacketIdleLocked() const;
     void SetDecodeSampleRate(int sample_rate, int frame_duration);
     void CheckAndUpdateAudioPowerState();
 };

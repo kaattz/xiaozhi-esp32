@@ -305,6 +305,10 @@ int VoicePeAudioCodec::Write(const int16_t* data, int samples) {
     if (samples_written < samples) {
         ESP_LOGW(TAG, "I2S TX partial write: requested=%d written=%d", samples, samples_written);
     }
+    ESP_LOGD(TAG, "I2S TX write: requested=%d written=%d bytes=%u",
+        samples,
+        samples_written,
+        static_cast<unsigned>(bytes_written));
     LogOutputProbe(data, samples_written);
     AppendReferenceSamples(data, samples_written);
     return samples_written;
@@ -381,6 +385,7 @@ void VoicePeAudioCodec::SetOutputVolume(int volume) {
     if (dac_initialized_) {
         ESP_ERROR_CHECK(dac_.SetVolume(output_volume_));
     }
+    Board::GetInstance().GetLed()->OnStateChanged();
 }
 
 void VoicePeAudioCodec::SetInputPurpose(AudioInputPurpose purpose) {

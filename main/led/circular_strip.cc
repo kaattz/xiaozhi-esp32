@@ -1,11 +1,21 @@
 #include "circular_strip.h"
 #include "application.h"
+#include "audio_codec.h"
+#include "board.h"
 #include <esp_log.h>
 #include <algorithm>
 
 #define TAG "CircularStrip"
 
 #define BLINK_INFINITE -1
+
+namespace {
+constexpr StripColor kVoicePeOffColor = { 0, 0, 0 };
+constexpr StripColor kVoicePeListeningColor = { 4, 32, 4 };
+constexpr StripColor kVoicePeSpeakingColor = { 4, 24, 32 };
+constexpr StripColor kVoicePeWarmWhiteColor = { 32, 28, 23 };
+constexpr StripColor kVoicePeRedColor = { 32, 0, 0 };
+}
 
 CircularStrip::CircularStrip(gpio_num_t gpio, uint16_t max_leds) : max_leds_(max_leds) {
     // If the gpio is not connected, you should use NoLed class
@@ -176,6 +186,43 @@ void CircularStrip::Scroll(StripColor low, StripColor high, int length, int inte
     });
 }
 
+void CircularStrip::ScrollReverse(StripColor low, StripColor high, int length, int interval_ms) {
+    for (int i = 0; i < max_leds_; i++) {
+        colors_[i] = low;
+    }
+    StartStripTask(interval_ms, [this, low, high, length]() {
+        static int offset = 0;
+        for (int i = 0; i < max_leds_; i++) {
+            colors_[i] = low;
+        }
+        for (int j = 0; j < length; j++) {
+            int i = (offset + j) % max_leds_;
+            colors_[i] = high;
+        }
+        for (int i = 0; i < max_leds_; i++) {
+            led_strip_set_pixel(led_strip_, i, colors_[i].red, colors_[i].green, colors_[i].blue);
+        }
+        led_strip_refresh(led_strip_);
+        offset = (offset + max_leds_ - 1) % max_leds_;
+    });
+}
+
+void CircularStrip::ShowMutedOrSilentIndicator(bool microphone_muted, bool speaker_silent) {
+    std::vector<StripColor> colors(max_leds_, kVoicePeOffColor);
+    if (microphone_muted) {
+        if (max_leds_ > 3) {
+            colors[3] = kVoicePeRedColor;
+        }
+        if (max_leds_ > 9) {
+            colors[9] = kVoicePeRedColor;
+        }
+    }
+    if (speaker_silent && max_leds_ > 6) {
+        colors[6] = kVoicePeRedColor;
+    }
+    SetMultiColors(colors);
+}
+
 void CircularStrip::StartStripTask(int interval_ms, std::function<void()> cb) {
     if (led_strip_ == nullptr) {
         return;
@@ -196,46 +243,51 @@ void CircularStrip::SetBrightness(uint8_t default_brightness, uint8_t low_bright
 
 void CircularStrip::OnStateChanged() {
     auto& app = Application::GetInstance();
+    auto& board = Board::GetInstance();
+    auto* codec = board.GetAudioCodec();
+    auto microphone_muted = board.IsMicrophoneMuted();
+    auto speaker_silent = codec != nullptr && codec->output_volume() == 0;
+    if (app.IsErrorAlertActive()) {
+        Blink(kVoicePeRedColor, 250);
+        return;
+    }
+    if (microphone_muted || speaker_silent) {
+        ShowMutedOrSilentIndicator(microphone_muted, speaker_silent);
+        return;
+    }
+
     auto device_state = app.GetDeviceState();
     switch (device_state) {
         case kDeviceStateStarting: {
-            StripColor low = { 0, 0, 0 };
-            StripColor high = { low_brightness_, low_brightness_, default_brightness_ };
-            Scroll(low, high, 3, 100);
+            Scroll(kVoicePeOffColor, kVoicePeListeningColor, 3, 100);
             break;
         }
         case kDeviceStateWifiConfiguring: {
-            StripColor color = { low_brightness_, low_brightness_, default_brightness_ };
-            Blink(color, 500);
+            Blink(kVoicePeWarmWhiteColor, 500);
             break;
         }
         case kDeviceStateIdle:
             FadeOut(50);
             break;
         case kDeviceStateConnecting: {
-            StripColor color = { low_brightness_, low_brightness_, default_brightness_ };
-            SetAllColor(color);
+            SetAllColor(kVoicePeListeningColor);
             break;
         }
         case kDeviceStateListening:
         case kDeviceStateAudioTesting: {
-            StripColor color = { default_brightness_, low_brightness_, low_brightness_ };
-            SetAllColor(color);
+            Scroll(kVoicePeOffColor, kVoicePeListeningColor, 3, 100);
             break;
         }
         case kDeviceStateSpeaking: {
-            StripColor color = { low_brightness_, default_brightness_, low_brightness_ };
-            SetAllColor(color);
+            ScrollReverse(kVoicePeOffColor, kVoicePeSpeakingColor, 3, 50);
             break;
         }
         case kDeviceStateUpgrading: {
-            StripColor color = { low_brightness_, default_brightness_, low_brightness_ };
-            Blink(color, 100);
+            Blink(kVoicePeWarmWhiteColor, 100);
             break;
         }
         case kDeviceStateActivating: {
-            StripColor color = { low_brightness_, default_brightness_, low_brightness_ };
-            Blink(color, 500);
+            Blink(kVoicePeWarmWhiteColor, 500);
             break;
         }
         default:

@@ -154,6 +154,61 @@ def test_voice_pe_led_status_ring_uses_existing_circular_strip():
     assert board.index("InitializeLed();") < board.index("InitializeButtons();")
 
 
+def test_voice_pe_led_scenes_follow_official_voice_pe_colors():
+    strip_header = read("main/led/circular_strip.h")
+    strip_source = read("main/led/circular_strip.cc")
+    wifi_configuring = strip_source[
+        strip_source.index("case kDeviceStateWifiConfiguring:") :
+        strip_source.index("case kDeviceStateIdle:")
+    ]
+    listening = strip_source[
+        strip_source.index("case kDeviceStateListening:") :
+        strip_source.index("case kDeviceStateSpeaking:")
+    ]
+    speaking = strip_source[
+        strip_source.index("case kDeviceStateSpeaking:") :
+        strip_source.index("case kDeviceStateUpgrading:")
+    ]
+
+    assert "constexpr StripColor kVoicePeListeningColor = { 4, 32, 4 }" in strip_source
+    assert "constexpr StripColor kVoicePeSpeakingColor = { 4, 24, 32 }" in strip_source
+    assert "constexpr StripColor kVoicePeWarmWhiteColor = { 32, 28, 23 }" in strip_source
+    assert "void ScrollReverse(StripColor low, StripColor high, int length, int interval_ms)" in strip_header
+    assert "void CircularStrip::ScrollReverse(" in strip_source
+    assert "Blink(kVoicePeWarmWhiteColor, 500)" in wifi_configuring
+    assert "StripColor color = { default_brightness_, low_brightness_, low_brightness_ }" not in listening
+    assert "Scroll(kVoicePeOffColor, kVoicePeListeningColor, 3, 100)" in listening
+    assert "ScrollReverse(kVoicePeOffColor, kVoicePeSpeakingColor, 3, 50)" in speaking
+
+
+def test_voice_pe_led_red_indicators_distinguish_mute_silent_and_error():
+    strip_header = read("main/led/circular_strip.h")
+    strip_source = read("main/led/circular_strip.cc")
+    application_header = read("main/application.h")
+    application = read("main/application.cc")
+    board = read("main/boards/home-assistant-voice-pe/home_assistant_voice_pe_board.cc")
+    codec = read("main/boards/home-assistant-voice-pe/voice_pe_audio_codec.cc")
+
+    assert "constexpr StripColor kVoicePeRedColor = { 32, 0, 0 }" in strip_source
+    assert "void ShowMutedOrSilentIndicator(bool microphone_muted, bool speaker_silent)" in strip_header
+    assert "void CircularStrip::ShowMutedOrSilentIndicator(bool microphone_muted, bool speaker_silent)" in strip_source
+    assert "colors[3] = kVoicePeRedColor" in strip_source
+    assert "colors[9] = kVoicePeRedColor" in strip_source
+    assert "colors[6] = kVoicePeRedColor" in strip_source
+    assert "if (app.IsErrorAlertActive())" in strip_source
+    assert "Blink(kVoicePeRedColor, 250)" in strip_source
+    assert "board.IsMicrophoneMuted()" in strip_source
+    assert "codec != nullptr && codec->output_volume() == 0" in strip_source
+    assert "ShowMutedOrSilentIndicator(microphone_muted, speaker_silent)" in strip_source
+    assert "bool IsErrorAlertActive() const" in application_header
+    assert "bool error_alert_active_ = false" in application_header
+    assert "error_alert_active_ = strcmp(status, Lang::Strings::ERROR) == 0" in application
+    assert "error_alert_active_ = false" in application
+    assert "Board::GetInstance().GetLed()->OnStateChanged()" in application
+    assert "GetLed()->OnStateChanged()" in board
+    assert "Board::GetInstance().GetLed()->OnStateChanged()" in codec
+
+
 def test_voice_pe_mute_switch_blocks_microphone_entry_without_muting_speaker():
     board = read("main/boards/home-assistant-voice-pe/home_assistant_voice_pe_board.cc")
     board_header = read("main/boards/common/board.h")
@@ -318,25 +373,176 @@ def test_voice_pe_waits_for_active_playback_before_listening_again():
     assert "void ResetVoiceProcessor()" in service_header
     assert "bool AudioService::HasPlaybackWork()" in service_source
     assert "void AudioService::ResetVoiceProcessor()" in service_source
-    assert "kPlaybackTailGuardMs = 700" in service_source
+    assert "kPlaybackTailGuardMs = 200" in service_source
+    assert "kDecodePacketIdleGuardMs = OPUS_FRAME_DURATION_MS * 2" in service_source
     assert "IsPlaybackTailGuardActiveLocked()" in service_header
     assert "bool AudioService::IsPlaybackTailGuardActiveLocked() const" in service_source
+    assert "IsDecodePacketIdleLocked()" in service_header
+    assert "bool AudioService::IsDecodePacketIdleLocked() const" in service_source
+    assert "decode_packet_seen_" in service_header
+    assert "decode_packet_count_" in service_header
+    assert "uint32_t GetDecodePacketCount()" in service_header
+    assert "uint32_t AudioService::GetDecodePacketCount()" in service_source
+    assert "last_decode_packet_time_" in service_header
     assert "playback_active_ = true" in service_source
     assert "playback_active_ = false" in service_source
-    assert "return !audio_decode_queue_.empty() || !audio_playback_queue_.empty() || playback_active_ || IsPlaybackTailGuardActiveLocked()" in service_source
-    assert "while (true)" in service_source[service_source.index("void AudioService::WaitForPlaybackQueueEmpty()"):]
+    assert "decode_active_ = true" in service_source
+    assert "decode_active_ = false" in service_source
+    assert "#define MAX_PLAYBACK_TASKS_IN_QUEUE 6" in service_header
+    assert "BeginPlaybackBuffering(size_t min_frames, int timeout_ms)" in service_source
+    assert "Playback buffer release" in service_source
+    assert "audio_service_.BeginPlaybackBuffering(kDefaultPlaybackBufferFrames" in application
+    assert "playback_duration_ms" in service_source
+    assert "task->pcm.size() * 1000" in service_source
+    assert "output_rate * output_channels" in service_source
+    assert "auto drain_base = last_output_time_ > output_finished_at ? last_output_time_ : output_finished_at" in service_source
+    assert "last_output_time_ = drain_base + std::chrono::milliseconds(playback_duration_ms)" in service_source
+    assert "decode_packet_seen_ = true" in service_source
+    assert "decode_packet_count_++" in service_source
+    assert "last_decode_packet_time_ = std::chrono::steady_clock::now()" in service_source
+    assert "!IsDecodePacketIdleLocked() || IsPlaybackTailGuardActiveLocked()" in service_source
+    assert "min_decode_packet_count" in service_source
+    assert "first_packet_timeout_ms" in service_source
+    assert "audio_queue_cv_.wait_until(lock, deadline)" in service_source
+    wait_method_name = "void AudioService::WaitForPlaybackQueueEmpty("
+    assert "while (true)" in service_source[service_source.index(wait_method_name):]
     assert "audio_queue_cv_.notify_all()" in service_source[
         service_source.index("playback_active_ = false") :
     ]
-    assert "audio_decode_queue_.empty() && audio_playback_queue_.empty() && !playback_active_" in service_source
+    assert "audio_decode_queue_.empty() && !decode_active_ && audio_playback_queue_.empty() && !playback_active_" in service_source
     assert "codec_->input_reference()" in service_source
-    assert "!IsPlaybackTailGuardActiveLocked()" in service_source
+    assert "IsDecodePacketIdleLocked() && !IsPlaybackTailGuardActiveLocked()" in service_source
+    assert "kDecodePacketIdleGuardMs - static_cast<int>(decode_elapsed_ms)" in service_source
+    assert "kPlaybackTailGuardMs - static_cast<int>(output_elapsed_ms)" in service_source
+    assert "return elapsed_ms < kPlaybackTailGuardMs" in service_source
+    assert "return elapsed_ms >= kDecodePacketIdleGuardMs" in service_source
     assert "vTaskDelay(pdMS_TO_TICKS(wait_ms))" in service_source
-    assert "audio_service_.WaitForPlaybackQueueEmpty()" in application
-    assert tts_stop_handler.index("audio_service_.WaitForPlaybackQueueEmpty()") < tts_stop_handler.index("SetDeviceState(kDeviceStateListening)")
+    assert "audio_service_.WaitForPlaybackQueueEmpty(" in application
+    assert "tts_start_decode_packet_count_ = audio_service_.GetDecodePacketCount()" in application
+    assert "audio_service_.ResetDecoderState()" in application
+    assert application.index("audio_service_.ResetDecoderState()") < application.index("SetDeviceState(kDeviceStateSpeaking)")
+    assert "wait_for_first_tts_audio ? tts_start_decode_packet_count_ : 0" in application
+    assert "wait_for_first_tts_audio ? 5000 : 0" in application
+    assert "TTS audio before stop: text=\\\"%s\\\" packets=%lu audio_ms=%lu seq=%lu..%lu gaps=%lu plc=%lu ts=%lu..%lu" in application
+    assert "TTS drain complete: text=\\\"%s\\\" packets=%lu audio_ms=%lu seq=%lu..%lu gaps=%lu plc=%lu ts=%lu..%lu" in application
+    assert "audio_service_.GetDecodePacketSummarySince(tts_start_decode_packet_count_)" in application
+    assert tts_stop_handler.index("audio_service_.WaitForPlaybackQueueEmpty(") < tts_stop_handler.index("SetDeviceState(kDeviceStateListening)")
     assert "audio_service_.ResetVoiceProcessor()" in tts_stop_handler
     assert tts_stop_handler.index("audio_service_.ResetVoiceProcessor()") < tts_stop_handler.index("audio_service_.ClearUploadQueues()")
     assert "state == kDeviceStateSpeaking || state == kDeviceStateListening" in incoming_audio_handler
+
+
+def test_voice_pe_prefers_websocket_when_available():
+    application = read("main/application.cc")
+    protocol_selection = application[
+        application.index("#if CONFIG_BOARD_TYPE_HOME_ASSISTANT_VOICE_PE") :
+        application.index("protocol_->OnConnected")
+    ]
+
+    assert "Voice PE: using WebSocket protocol" in protocol_selection
+    assert "Voice PE: WebSocket config unavailable, using MQTT protocol" in protocol_selection
+    assert "diagnostic" not in protocol_selection
+    assert "ota_->HasWebsocketConfig()" in protocol_selection
+    assert "ota_->HasMqttConfig()" in protocol_selection
+    assert "std::make_unique<WebsocketProtocol>()" in protocol_selection
+    assert "std::make_unique<MqttProtocol>()" in protocol_selection
+    assert protocol_selection.index("ota_->HasWebsocketConfig()") < protocol_selection.index("ota_->HasMqttConfig()")
+
+
+def test_tts_start_resets_decoder_state_without_clearing_queued_audio():
+    service_header = read("main/audio/audio_service.h")
+    service_source = read("main/audio/audio_service.cc")
+    application = read("main/application.cc")
+    tts_start_handler = application[
+        application.index('strcmp(state->valuestring, "start") == 0') :
+        application.index('strcmp(state->valuestring, "stop") == 0')
+    ]
+    reset_state_method = service_source[
+        service_source.index("void AudioService::ResetDecoderState()") :
+        service_source.index("void AudioService::CheckAndUpdateAudioPowerState()")
+    ]
+
+    assert "void ResetDecoderState();" in service_header
+    assert "audio_service_.ResetDecoderState()" in tts_start_handler
+    assert "audio_decode_queue_.clear()" not in reset_state_method
+    assert "audio_playback_queue_.clear()" not in reset_state_method
+    assert "esp_opus_dec_reset(opus_decoder_)" in reset_state_method
+    assert "esp_ae_rate_cvt_reset(output_resampler_)" in reset_state_method
+    assert "!audio_decode_queue_.empty() || decode_active_ || !audio_playback_queue_.empty() || playback_active_" in reset_state_method
+    assert 'ESP_LOGD(TAG, "Skip decoder state reset' in reset_state_method
+    assert 'ESP_LOGW(TAG, "Skip decoder state reset' not in reset_state_method
+
+
+def test_playback_buffering_is_cleared_on_drain_and_reset_paths():
+    service_source = read("main/audio/audio_service.cc")
+    wait_method = service_source[
+        service_source.index("void AudioService::WaitForPlaybackQueueEmpty(") :
+        service_source.index("bool AudioService::IsPlaybackTailGuardActiveLocked()")
+    ]
+    reset_decoder_method = service_source[
+        service_source.index("void AudioService::ResetDecoder()") :
+        service_source.index("void AudioService::ResetDecoderState()")
+    ]
+
+    assert wait_method.count("playback_buffering_ = false") >= 2
+    assert "playback_buffer_min_frames_ = 0" in wait_method
+    assert "playback_buffer_timeout_ms_ = 0" in wait_method
+    assert "playback_buffer_started_at_ = {}" in wait_method
+    assert "playback_buffering_ = false" in reset_decoder_method
+
+
+def test_udp_packet_loss_uses_opus_plc_and_playback_buffering():
+    protocol_header = read("main/protocols/protocol.h")
+    mqtt_protocol = read("main/protocols/mqtt_protocol.cc")
+    service_source = read("main/audio/audio_service.cc")
+
+    assert "bool loss_concealment = false" in protocol_header
+    assert "uint32_t sequence = 0" in protocol_header
+    assert "packet->sequence = sequence" in mqtt_protocol
+    assert "missing->sequence = missing_sequence" in mqtt_protocol
+    assert "sequence <= remote_sequence_" in mqtt_protocol
+    assert "sequence > remote_sequence_ + 1" in mqtt_protocol
+    assert "Insert PLC audio packet" in mqtt_protocol
+    assert "missing->loss_concealment = true" in mqtt_protocol
+    assert "ESP_AUDIO_DEC_RECOVERY_PLC" in service_source
+    assert "packet_loss_concealment ? nullptr" in service_source
+    assert "Playback buffer begin" in service_source
+    assert "Playback buffer release" in service_source
+
+
+def test_tts_summary_reports_text_audio_ms_sequence_gaps_and_plc():
+    service_header = read("main/audio/audio_service.h")
+    service_source = read("main/audio/audio_service.cc")
+    application_header = read("main/application.h")
+    application = read("main/application.cc")
+
+    assert "struct DecodePacketInfo" in service_header
+    assert "struct DecodePacketSummary" in service_header
+    assert "std::deque<DecodePacketInfo> decode_packet_history_" in service_header
+    assert "DecodePacketSummary GetDecodePacketSummarySince(uint32_t start_count)" in service_header
+    assert "decode_packet_history_.push_back" in service_source
+    assert "summary.audio_ms += packet.frame_duration" in service_source
+    assert "summary.plc_packets++" in service_source
+    assert "summary.sequence_gaps +=" in service_source
+    assert "std::string current_tts_text_" in application_header
+    assert "current_tts_text_.clear()" in application
+    assert "current_tts_text_ += message" in application
+    assert "TTS drain complete: text=\\\"%s\\\"" in application
+
+
+def test_high_frequency_audio_debug_logs_are_not_info_level():
+    application = read("main/application.cc")
+    service_source = read("main/audio/audio_service.cc")
+    mqtt_protocol = read("main/protocols/mqtt_protocol.cc")
+    voice_pe_codec = read("main/boards/home-assistant-voice-pe/voice_pe_audio_codec.cc")
+
+    assert 'ESP_LOGI(TAG, "Incoming audio accepted' not in application
+    assert 'ESP_LOGI(TAG, "UDP audio in' not in mqtt_protocol
+    assert 'ESP_LOGI(TAG, "Decode queue push' not in service_source
+    assert 'ESP_LOGI(TAG, "Decode audio' not in service_source
+    assert 'ESP_LOGI(TAG, "Output task start' not in service_source
+    assert 'ESP_LOGI(TAG, "Output task wrote' not in service_source
+    assert 'ESP_LOGI(TAG, "I2S TX write' not in voice_pe_codec
 
 
 def test_speaking_state_does_not_clear_queued_tts_audio():
