@@ -172,25 +172,24 @@ private:
     void OnMuteChanged(bool muted) {
         ESP_LOGI(TAG, "Mute switch changed: muted=%s raw=%d",
             muted ? "true" : "false", gpio_get_level(VOICE_PE_MUTE_GPIO));
-        if (!muted) {
-            return;
-        }
 
         Application::GetInstance().Schedule([this]() {
-            if (!muted_.load()) {
-                return;
-            }
-
             auto& app = Application::GetInstance();
+            auto& audio_service = app.GetAudioService();
             auto state = app.GetDeviceState();
-            if (state == kDeviceStateListening) {
-                ESP_LOGI(TAG, "Stopping listening because Voice PE mute switch is active");
-                app.StopListening();
-            } else if (state == kDeviceStateConnecting) {
-                ESP_LOGI(TAG, "Canceling connecting because Voice PE mute switch is active");
-                app.SetDeviceState(kDeviceStateIdle);
-            } else if (state == kDeviceStateSpeaking) {
-                ESP_LOGI(TAG, "Voice PE mute switch is active; current TTS playback continues");
+            if (muted_.load()) {
+                audio_service.EnableWakeWordDetection(false);
+                if (state == kDeviceStateListening) {
+                    ESP_LOGI(TAG, "Stopping listening because Voice PE mute switch is active");
+                    app.StopListening();
+                } else if (state == kDeviceStateConnecting) {
+                    ESP_LOGI(TAG, "Canceling connecting because Voice PE mute switch is active");
+                    app.SetDeviceState(kDeviceStateIdle);
+                } else if (state == kDeviceStateSpeaking) {
+                    ESP_LOGI(TAG, "Voice PE mute switch is active; current TTS playback continues");
+                }
+            } else if (state == kDeviceStateIdle || state == kDeviceStateSpeaking) {
+                audio_service.EnableWakeWordDetection(true);
             }
         });
     }
@@ -269,6 +268,14 @@ public:
 
     virtual Led* GetLed() override {
         return led_strip_.get();
+    }
+
+    virtual bool IsMicrophoneMuted() override {
+        return muted_.load();
+    }
+
+    virtual bool ShouldUploadAudioDuringSpeaking() override {
+        return false;
     }
 };
 

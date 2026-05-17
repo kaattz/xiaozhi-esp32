@@ -14,6 +14,13 @@
 #define AUDIO_CODEC_DMA_DESC_NUM 6
 #define AUDIO_CODEC_DMA_FRAME_NUM 240
 
+enum class AudioInputPurpose {
+    kDefault,
+    kWakeWord,
+    kVoiceProcessing,
+    kAudioTesting,
+};
+
 class AudioCodec {
 public:
     AudioCodec();
@@ -27,6 +34,7 @@ public:
     virtual void OutputData(std::vector<int16_t>& data);
     virtual bool InputData(std::vector<int16_t>& data);
     virtual void Start();
+    virtual void SetInputPurpose(AudioInputPurpose purpose) {}
 
     inline bool duplex() const { return duplex_; }
     inline bool input_reference() const { return input_reference_; }

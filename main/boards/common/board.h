@@ -76,6 +76,8 @@ public:
     virtual NetworkInterface* GetNetwork() = 0;
     virtual void StartNetwork() = 0;
     virtual void SetNetworkEventCallback(NetworkEventCallback callback) { (void)callback; }
+    virtual bool IsMicrophoneMuted() { return false; }
+    virtual bool ShouldUploadAudioDuringSpeaking() { return true; }
     virtual const char* GetNetworkStateIcon() = 0;
     virtual bool GetBatteryLevel(int &level, bool& charging, bool& discharging);
     virtual std::string GetSystemInfoJson();

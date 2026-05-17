@@ -14,3 +14,25 @@
 - Voice PE 麦克风实测：XMOS `channel1=NS` 比 `channel0=AGC` 底噪低；24 倍固定增益主观音量够用，48 倍没有明显更响但底噪更大，第一阶段固定 24 倍。
 - 用户的 `kaattz/xiaozhi-esp32` 是自己的目标仓库时，不要默认建议向 `78/xiaozhi-esp32` 提 PR；应先确认是 fork 贡献上游，还是只在用户自己的仓库合并发布。
 - 写 Voice PE 交互类硬件需求时，必须显式定义 mute 在 speaking 状态下是否中断 TTS、物理开关 debounce 策略、非主线程硬件回调是否需要调度到主任务，以及复杂硬件任务是否要拆成 GPIO 探测和行为接入两步。
+- Voice PE AEC reference 没有播放时为空是正常状态，不能把 idle/纯听音期间的 reference underrun 当警告刷屏；underrun 诊断必须只在最近有播放 reference 写入的窗口内输出。
+- Voice PE 本地唤醒会在 idle 持续读取麦克风；mic RMS/probe 这类开发诊断不能默认用 INFO 输出，否则无对话时 monitor 会持续刷屏，应默认 DEBUG 或显式开关。
+- Voice PE 官方 ESPHome 配置里 micro_wake_word 使用 XMOS channel 1（NS），voice_assistant 使用 channel 0（AGC）；小智适配不能把唤醒和 STT 固定到同一个 slot。
+- Voice PE 从 speaking 切回 listening 前不能只等播放队列为空；AudioOutputTask 可能已经把当前 chunk 从队列取出但 I2S/DAC/扬声器仍在播放，必须等待 active playback 结束并保留短尾音窗口，否则会把自己的 TTS 尾音上传成用户语音。
+- 处理小智 TTS stop 时不能先把状态切到 listening 再等播放收尾；状态一变成 listening，后续迟到的 TTS 音频包会被 OnIncomingAudio 丢弃，导致长句后半段被截断。必须先 drain playback，再切 listening/idle。
+- 官方小智的自由打断依赖 `kListeningModeRealtime` 下 speaking 阶段继续上传 voice processing 输出；但 Voice PE 软件 reference AEC 实测仍有残留时，不能把残留音频继续传给服务器。当前阶段 speaking 只保留本地唤醒词/按钮打断，自由边播边听必须等 reference 延迟实测或硬件回采证明可靠后再启用。
+- 对没有硬件回采、用播放 PCM 做软件 AEC reference 的板卡，应先对齐官方小智实现：播放写入后立即进入 reference FIFO，不要凭经验先加 100ms 延迟线；延迟只能基于实测证据再调。
+- Voice PE 长 TTS 播放时如果 AFE 报 `Ringbuffer of AFE(FEED) is full`，优先检查 AFE fetch 是否被上行 Opus 编码队列反压；realtime 打断链路不能阻塞 fetch，队列满时应丢弃过期上行帧并保留最新帧。
+- Voice PE realtime 模式下，本地 audio processor 在 speaking 阶段会持续运行；从 TTS stop 回到 `listening` 时如果 processor 已运行，不能重复发送服务器 `listen/start`，否则会打断多段助手回复和工具结果。
+- Voice PE `voice pipeline` 只有 input/feed/output/encode 计数不够诊断“聆听中无反应”；必须同时看 AFE 输出 RMS、实际 UDP 发送计数和发送失败计数，才能区分本地 AFE 抹掉人声、发送失败和服务端 ASR/VAD 不切句。
+- Voice PE 的 `listen/start` 控制包走 MQTT、音频包走 UDP；只能在新开收音窗口、播放提示音入口或本地 voice processor 未运行时发送，不能把每次状态回到 listening 都当作新窗口。
+- 用户确认 004 阶段主观背景噪声也大时，不能把 006 的高 `out_rms` 简化归因到 STT 使用 AGC 通道；必须同时记录 raw mic RMS 和 AFE output RMS，再判断是原始输入增益/噪声问题，还是 AFE/AEC 处理链放大问题。
+- Voice PE 使用 channel 1 / NS 后，安静 listening 实测 `raw_rms` 约 230..420、`out_rms` 约 180..590，说明 2 万级 `out_rms` 不是 AFE 必然放大，而是输入通道/链路状态导致；后续要继续用同一条 pipeline 日志对比说话时 RMS。
+- 用户说 Voice PE speaker 有“电流声”时，必须先区分 idle 底噪和播放中失真；本次是小智回复出声时才有，排查方向应是播放 PCM 幅度、48k I2S、AIC3204 数字音量/驱动增益，而不是静音时功放白噪。
+- Voice PE 唤醒后进入 listening 但没听到回复时，要检查是否存在 `speaking -> listening` 早于 `Application: <<` 的迟到 TTS；listening 状态也必须接收服务器 TTS 音频，并在本地仍有播放工作时暂停麦克风上传。
+- Voice PE speaking 阶段禁上传时，不能只清 send queue；AFE 输出可能已经进入 encode queue 但还没编码。TTS 收尾后切 listening 前必须同时清理上行 encode queue 和 send queue，避免残留帧被服务器识别成第二句用户语音。
+- Voice PE 迟到 TTS 音频可能在状态已回到 listening 后才播放；`HasPlaybackWork()` 不能只看 decode/playback/active queue，还必须把 700ms 播放尾音保护窗算作播放工作，否则刚播完的扬声器尾音会被上传成第二句用户语音。
+- Voice PE speaking 阶段不上传服务器音频时，切回 listening 前还必须重置本地 voice processor/AFe 缓冲；只清 encode/send queue 不够，因为 AFE 内部 input/output buffer 可能继续吐出 speaking 阶段旧帧。
+- Voice PE 软件 reference AEC 在 realtime 连续上传模式下连续多版仍会把本机播报残留识别成第二句时，应停止补丁式修复，默认切到 `auto` 收音模式；自由边播边听必须等 reference 延迟实测或硬件回采证明可靠后再启用。
+- Voice PE/listening 允许接收迟到 TTS 后，进入 speaking 状态时不能再调用会清空 decode/playback queue 的 `ResetDecoder()`；TTS 音频包可能先于 `tts start` JSON 到达，清队列会造成只播一个字或回复截断。
+- Voice PE/listening 允许接收迟到 TTS 后，`EnableVoiceProcessing(true)` 也不能隐式 `ResetDecoder()`；否则刚进入 listening 时接收的迟到 TTS 音频会在启动收音处理时被清掉，表现为显示完整但实际少播后半句。
+- Voice PE 排查日志里连续出现 `>> 你好小智/你好小志` 时，必须先和用户确认哪些是人工重复触发；不能直接推断为回声或残留音频误识别。

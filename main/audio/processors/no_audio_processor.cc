@@ -42,6 +42,10 @@ void NoAudioProcessor::Start() {
 
 void NoAudioProcessor::Stop() {
     is_running_ = false;
+    Reset();
+}
+
+void NoAudioProcessor::Reset() {
     output_buffer_.clear();
 }
 

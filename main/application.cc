@@ -228,8 +228,18 @@ void Application::Run() {
         }
 
         if (bits & MAIN_EVENT_SEND_AUDIO) {
+            auto& board = Board::GetInstance();
+            auto state = GetDeviceState();
+            bool should_upload_audio = (state == kDeviceStateListening && !audio_service_.HasPlaybackWork()) ||
+                (state == kDeviceStateSpeaking && board.ShouldUploadAudioDuringSpeaking());
             while (auto packet = audio_service_.PopPacketFromSendQueue()) {
-                if (protocol_ && !protocol_->SendAudio(std::move(packet))) {
+                if (!should_upload_audio) {
+                    continue;
+                }
+                bool sent = protocol_ && protocol_->SendAudio(std::move(packet));
+                audio_service_.NotifyPacketSent(sent);
+                if (!sent) {
+                    ESP_LOGW(TAG, "Failed to send audio packet");
                     break;
                 }
             }
@@ -527,7 +537,8 @@ void Application::InitializeProtocol() {
     });
     
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
-        if (GetDeviceState() == kDeviceStateSpeaking) {
+        auto state = GetDeviceState();
+        if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
         }
     });
@@ -563,6 +574,11 @@ void Application::InitializeProtocol() {
             } else if (strcmp(state->valuestring, "stop") == 0) {
                 Schedule([this]() {
                     if (GetDeviceState() == kDeviceStateSpeaking) {
+                        audio_service_.WaitForPlaybackQueueEmpty();
+                        if (!Board::GetInstance().ShouldUploadAudioDuringSpeaking()) {
+                            audio_service_.ResetVoiceProcessor();
+                            audio_service_.ClearUploadQueues();
+                        }
                         if (listening_mode_ == kListeningModeManualStop) {
                             SetDeviceState(kDeviceStateIdle);
                         } else {
@@ -811,6 +827,11 @@ void Application::HandleWakeWordDetectedEvent() {
     if (!protocol_) {
         return;
     }
+    if (Board::GetInstance().IsMicrophoneMuted()) {
+        ESP_LOGW(TAG, "Ignoring wake word while microphone mute is active");
+        audio_service_.EnableWakeWordDetection(false);
+        return;
+    }
 
     auto state = GetDeviceState();
     auto wake_word = audio_service_.GetLastWakeWord();
@@ -906,8 +927,7 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
     protocol_->SendWakeWordDetected(wake_word);
     SetListeningMode(GetDefaultListeningMode());
 #else
-    // Set flag to play popup sound after state changes to listening
-    // (PlaySound here would be cleared by ResetDecoder in EnableVoiceProcessing)
+    // Set flag to play popup sound after state changes to listening.
     play_popup_on_listening_ = true;
     SetListeningMode(GetDefaultListeningMode());
 #endif
@@ -944,7 +964,7 @@ void Application::HandleStateChangedEvent() {
             display->ClearChatMessages();  // Clear messages first
             display->SetEmotion("neutral"); // Then set emotion (wechat mode checks child count)
             audio_service_.EnableVoiceProcessing(false);
-            audio_service_.EnableWakeWordDetection(true);
+            audio_service_.EnableWakeWordDetection(!board.IsMicrophoneMuted());
             break;
         case kDeviceStateConnecting:
             display->SetStatus(Lang::Strings::CONNECTING);
@@ -955,22 +975,25 @@ void Application::HandleStateChangedEvent() {
             display->SetStatus(Lang::Strings::LISTENING);
             display->SetEmotion("neutral");
 
-            // Make sure the audio processor is running
+            // Keep the realtime stream continuous after TTS. Restarting listen/start
+            // after every tts stop can cancel multi-part assistant responses.
             if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning()) {
-                // For auto mode, wait for playback queue to be empty before enabling voice processing
-                // This prevents audio truncation when STOP arrives late due to network jitter
+                // For auto mode, wait for playback queue to be empty before enabling voice processing.
+                // This prevents audio truncation when STOP arrives late due to network jitter.
                 if (listening_mode_ == kListeningModeAutoStop) {
                     audio_service_.WaitForPlaybackQueueEmpty();
                 }
-                
-                // Send the start listening command
+
                 protocol_->SendStartListening(listening_mode_);
                 audio_service_.EnableVoiceProcessing(true);
+                ESP_LOGI(TAG, "Listening started: mode=%d processor_running=%d",
+                    static_cast<int>(listening_mode_),
+                    audio_service_.IsAudioProcessorRunning() ? 1 : 0);
             }
 
 #ifdef CONFIG_WAKE_WORD_DETECTION_IN_LISTENING
             // Enable wake word detection in listening mode (configured via Kconfig)
-            audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
+            audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord() && !board.IsMicrophoneMuted());
 #else
             // Disable wake word detection in listening mode
             audio_service_.EnableWakeWordDetection(false);
@@ -988,9 +1011,10 @@ void Application::HandleStateChangedEvent() {
             if (listening_mode_ != kListeningModeRealtime) {
                 audio_service_.EnableVoiceProcessing(false);
                 // Only AFE wake word can be detected in speaking mode
-                audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
+                audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord() && !board.IsMicrophoneMuted());
+            } else if (!board.ShouldUploadAudioDuringSpeaking()) {
+                audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord() && !board.IsMicrophoneMuted());
             }
-            audio_service_.ResetDecoder();
             break;
         case kDeviceStateWifiConfiguring:
             audio_service_.EnableVoiceProcessing(false);
@@ -1024,6 +1048,9 @@ void Application::SetListeningMode(ListeningMode mode) {
 }
 
 ListeningMode Application::GetDefaultListeningMode() const {
+    if (!Board::GetInstance().ShouldUploadAudioDuringSpeaking()) {
+        return kListeningModeAutoStop;
+    }
     return aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime;
 }
 

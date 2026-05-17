@@ -26,6 +26,7 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
     for (int i = 0; i < ref_num; i++) {
         input_format.push_back('R');
     }
+    ESP_LOGI(TAG, "Audio processor input format: %s", input_format.c_str());
 
     srmodel_list_t *models;
     if (models_list == nullptr) {
@@ -112,12 +113,18 @@ void AfeAudioProcessor::Start() {
 
 void AfeAudioProcessor::Stop() {
     xEventGroupClearBits(event_group_, PROCESSOR_RUNNING);
+    Reset();
+}
 
+void AfeAudioProcessor::Reset() {
     std::lock_guard<std::mutex> lock(input_buffer_mutex_);
     if (afe_data_ != nullptr) {
         afe_iface_->reset_buffer(afe_data_);
     }
     input_buffer_.clear();
+    output_buffer_.clear();
+    output_buffer_.reserve(frame_samples_);
+    is_speaking_ = false;
 }
 
 bool AfeAudioProcessor::IsRunning() {
