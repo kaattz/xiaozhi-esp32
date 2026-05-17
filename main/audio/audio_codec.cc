@@ -15,7 +15,16 @@ AudioCodec::~AudioCodec() {
 }
 
 void AudioCodec::OutputData(std::vector<int16_t>& data) {
-    Write(data.data(), data.size());
+    int written = 0;
+    while (written < static_cast<int>(data.size())) {
+        int result = Write(data.data() + written, data.size() - written);
+        if (result <= 0) {
+            ESP_LOGE(TAG, "Audio output write failed: requested=%u written=%d result=%d",
+                static_cast<unsigned>(data.size()), written, result);
+            break;
+        }
+        written += result;
+    }
 }
 
 bool AudioCodec::InputData(std::vector<int16_t>& data) {

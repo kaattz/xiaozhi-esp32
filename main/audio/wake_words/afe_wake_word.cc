@@ -99,6 +99,7 @@ bool AfeWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
     for (int i = 0; i < ref_num; i++) {
         input_format.push_back('R');
     }
+    ESP_LOGI(TAG, "AFE wake word input format: %s", input_format.c_str());
     afe_config_t* afe_config = afe_config_init(input_format.c_str(), models_, AFE_TYPE_SR, AFE_MODE_HIGH_PERF);
     afe_config->aec_init = codec_->input_reference();
     afe_config->aec_mode = AEC_MODE_SR_HIGH_PERF;

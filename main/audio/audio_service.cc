@@ -1,6 +1,8 @@
 #include "audio_service.h"
 #include <esp_log.h>
+#include <algorithm>
 #include <cstring>
+#include <cmath>
 #include <limits>
 
 #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)        \
@@ -37,6 +39,42 @@
 #endif
 
 #define TAG "AudioService"
+
+namespace {
+constexpr int kPlaybackTailGuardMs = 700;
+constexpr int64_t kVoicePipelineProbeIntervalUs = 2000 * 1000;
+
+float CalculateRms(const std::vector<int16_t>& data) {
+    if (data.empty()) {
+        return 0.0f;
+    }
+
+    double sum_squares = 0.0;
+    for (int16_t sample : data) {
+        sum_squares += static_cast<double>(sample) * sample;
+    }
+    return static_cast<float>(std::sqrt(sum_squares / data.size()));
+}
+
+float CalculateMicRms(const std::vector<int16_t>& data, int channels) {
+    if (data.empty()) {
+        return 0.0f;
+    }
+
+    int stride = std::max(channels, 1);
+    double sum_squares = 0.0;
+    size_t sample_count = 0;
+    for (size_t i = 0; i < data.size(); i += stride) {
+        sum_squares += static_cast<double>(data[i]) * data[i];
+        sample_count++;
+    }
+
+    if (sample_count == 0) {
+        return 0.0f;
+    }
+    return static_cast<float>(std::sqrt(sum_squares / sample_count));
+}
+}
 
 AudioService::AudioService() {
     event_group_ = xEventGroupCreate();
@@ -100,7 +138,9 @@ void AudioService::Initialize(AudioCodec* codec) {
 #endif
 
     audio_processor_->OnOutput([this](std::vector<int16_t>&& data) {
-        PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));
+        debug_statistics_.processor_output_count++;
+        debug_statistics_.processor_output_rms = CalculateRms(data);
+        PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data), !codec_->input_reference());
     });
 
     audio_processor_->OnVadStateChange([this](bool speaking) {
@@ -252,6 +292,7 @@ void AudioService::AudioInputTask() {
             }
             std::vector<int16_t> data;
             int samples = OPUS_FRAME_DURATION_MS * 16000 / 1000;
+            codec_->SetInputPurpose(AudioInputPurpose::kAudioTesting);
             if (ReadAudioData(data, 16000, samples)) {
                 // If input channels is 2, we need to fetch the left channel data
                 if (codec_->input_channels() == 2) {
@@ -270,12 +311,20 @@ void AudioService::AudioInputTask() {
         if (bits & (AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING)) {
             int samples = 160; // 10ms
             std::vector<int16_t> data;
+            if (bits & AS_EVENT_AUDIO_PROCESSOR_RUNNING) {
+                codec_->SetInputPurpose(AudioInputPurpose::kVoiceProcessing);
+            } else {
+                codec_->SetInputPurpose(AudioInputPurpose::kWakeWord);
+            }
             if (ReadAudioData(data, 16000, samples)) {
+                debug_statistics_.raw_input_rms = CalculateMicRms(data, codec_->input_channels());
                 if (bits & AS_EVENT_WAKE_WORD_RUNNING) {
                     wake_word_->Feed(data);
                 }
                 if (bits & AS_EVENT_AUDIO_PROCESSOR_RUNNING) {
+                    debug_statistics_.processor_feed_count++;
                     audio_processor_->Feed(std::move(data));
+                    LogVoicePipelineProbe();
                 }
                 continue;
             }
@@ -298,6 +347,7 @@ void AudioService::AudioOutputTask() {
 
         auto task = std::move(audio_playback_queue_.front());
         audio_playback_queue_.pop_front();
+        playback_active_ = true;
         audio_queue_cv_.notify_all();
         lock.unlock();
 
@@ -310,16 +360,20 @@ void AudioService::AudioOutputTask() {
         codec_->OutputData(task->pcm);
 
         /* Update the last output time */
-        last_output_time_ = std::chrono::steady_clock::now();
+        auto output_finished_at = std::chrono::steady_clock::now();
         debug_statistics_.playback_count++;
 
+        lock.lock();
+        last_output_time_ = output_finished_at;
+        playback_active_ = false;
 #if CONFIG_USE_SERVER_AEC
         /* Record the timestamp for server AEC */
         if (task->timestamp > 0) {
-            lock.lock();
             timestamp_queue_.push_back(task->timestamp);
         }
 #endif
+        audio_queue_cv_.notify_all();
+        lock.unlock();
     }
 
     ESP_LOGW(TAG, "Audio output task stopped");
@@ -482,7 +536,7 @@ void AudioService::SetDecodeSampleRate(int sample_rate, int frame_duration) {
     }
 }
 
-void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm) {
+void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm, bool wait) {
     auto task = std::make_unique<AudioTask>();
     task->type = type;
     task->pcm = std::move(pcm);
@@ -499,7 +553,13 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
         timestamp_queue_.pop_front();
     }
 
-    audio_queue_cv_.wait(lock, [this]() { return audio_encode_queue_.size() < MAX_ENCODE_TASKS_IN_QUEUE; });
+    if (!wait && audio_encode_queue_.size() >= MAX_ENCODE_TASKS_IN_QUEUE) {
+        audio_encode_queue_.pop_front();
+        debug_statistics_.encode_drop_count++;
+    }
+    if (wait) {
+        audio_queue_cv_.wait(lock, [this]() { return audio_encode_queue_.size() < MAX_ENCODE_TASKS_IN_QUEUE; });
+    }
     audio_encode_queue_.push_back(std::move(task));
     audio_queue_cv_.notify_all();
 }
@@ -518,6 +578,17 @@ bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> pa
     return true;
 }
 
+void AudioService::ClearUploadQueues() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    audio_send_queue_.clear();
+    audio_encode_queue_.erase(
+        std::remove_if(audio_encode_queue_.begin(), audio_encode_queue_.end(), [](const auto& task) {
+            return task && task->type == kAudioTaskTypeEncodeToSendQueue;
+        }),
+        audio_encode_queue_.end());
+    audio_queue_cv_.notify_all();
+}
+
 std::unique_ptr<AudioStreamPacket> AudioService::PopPacketFromSendQueue() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     if (audio_send_queue_.empty()) {
@@ -527,6 +598,14 @@ std::unique_ptr<AudioStreamPacket> AudioService::PopPacketFromSendQueue() {
     audio_send_queue_.pop_front();
     audio_queue_cv_.notify_all();
     return packet;
+}
+
+void AudioService::NotifyPacketSent(bool success) {
+    if (success) {
+        debug_statistics_.send_count++;
+    } else {
+        debug_statistics_.send_fail_count++;
+    }
 }
 
 void AudioService::EncodeWakeWord() {
@@ -592,8 +671,6 @@ void AudioService::EnableVoiceProcessing(bool enable) {
             audio_processor_initialized_ = true;
         }
 
-        /* We should make sure no audio is playing */
-        ResetDecoder();
         audio_input_need_warmup_ = true;
         // Reset input resampler to clear cached data from previous mode (e.g. WakeWord)
         // This prevents buffer overflow when switching between different feed sizes
@@ -608,6 +685,21 @@ void AudioService::EnableVoiceProcessing(bool enable) {
     } else {
         audio_processor_->Stop();
         xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
+    }
+}
+
+void AudioService::ResetVoiceProcessor() {
+    if (!audio_processor_initialized_ || !(xEventGroupGetBits(event_group_) & AS_EVENT_AUDIO_PROCESSOR_RUNNING)) {
+        return;
+    }
+
+    audio_processor_->Reset();
+    audio_input_need_warmup_ = true;
+    {
+        std::lock_guard<std::mutex> lock(input_resampler_mutex_);
+        if (input_resampler_ != nullptr) {
+            esp_ae_rate_cvt_reset(input_resampler_);
+        }
     }
 }
 
@@ -666,11 +758,67 @@ bool AudioService::IsIdle() {
     return audio_encode_queue_.empty() && audio_decode_queue_.empty() && audio_playback_queue_.empty() && audio_testing_queue_.empty();
 }
 
+bool AudioService::HasPlaybackWork() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    return !audio_decode_queue_.empty() || !audio_playback_queue_.empty() || playback_active_ || IsPlaybackTailGuardActiveLocked();
+}
+
 void AudioService::WaitForPlaybackQueueEmpty() {
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
-    audio_queue_cv_.wait(lock, [this]() { 
-        return service_stopped_ || (audio_decode_queue_.empty() && audio_playback_queue_.empty()); 
-    });
+    while (true) {
+        audio_queue_cv_.wait(lock, [this]() {
+            return service_stopped_ || (audio_decode_queue_.empty() && audio_playback_queue_.empty() && !playback_active_);
+        });
+        if (service_stopped_ || !IsPlaybackTailGuardActiveLocked()) {
+            return;
+        }
+
+        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - last_output_time_).count();
+        int wait_ms = kPlaybackTailGuardMs - static_cast<int>(elapsed_ms);
+        lock.unlock();
+        vTaskDelay(pdMS_TO_TICKS(wait_ms));
+        lock.lock();
+    }
+}
+
+bool AudioService::IsPlaybackTailGuardActiveLocked() const {
+    if (codec_ == nullptr || !codec_->input_reference()) {
+        return false;
+    }
+
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - last_output_time_).count();
+    return elapsed_ms >= 0 && elapsed_ms < kPlaybackTailGuardMs;
+}
+
+void AudioService::LogVoicePipelineProbe() {
+    const int64_t now_us = esp_timer_get_time();
+    if (now_us - last_voice_pipeline_probe_us_ < kVoicePipelineProbeIntervalUs) {
+        return;
+    }
+
+    size_t send_queue_size = 0;
+    size_t encode_queue_size = 0;
+    {
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        send_queue_size = audio_send_queue_.size();
+        encode_queue_size = audio_encode_queue_.size();
+    }
+
+    ESP_LOGI(TAG, "voice pipeline: input=%u raw_rms=%.1f afe_feed=%u afe_out=%u out_rms=%.1f encode=%u drops=%u sent=%u send_fail=%u sendq=%u encodeq=%u",
+        debug_statistics_.input_count,
+        debug_statistics_.raw_input_rms,
+        debug_statistics_.processor_feed_count,
+        debug_statistics_.processor_output_count,
+        debug_statistics_.processor_output_rms,
+        debug_statistics_.encode_count,
+        debug_statistics_.encode_drop_count,
+        debug_statistics_.send_count,
+        debug_statistics_.send_fail_count,
+        static_cast<unsigned>(send_queue_size),
+        static_cast<unsigned>(encode_queue_size));
+    last_voice_pipeline_probe_us_ = now_us;
 }
 
 void AudioService::ResetDecoder() {

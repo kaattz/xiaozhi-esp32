@@ -17,6 +17,7 @@ public:
     void Feed(std::vector<int16_t>&& data) override;
     void Start() override;
     void Stop() override;
+    void Reset() override;
     bool IsRunning() override;
     void OnOutput(std::function<void(std::vector<int16_t>&& data)> callback) override;
     void OnVadStateChange(std::function<void(bool speaking)> callback) override;
@@ -32,4 +33,4 @@ private:
     std::atomic<bool> is_running_ = false;
 };
 
-#endif 
+#endif

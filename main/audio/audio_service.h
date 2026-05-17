@@ -100,6 +100,13 @@ struct DebugStatistics {
     uint32_t decode_count = 0;
     uint32_t encode_count = 0;
     uint32_t playback_count = 0;
+    float raw_input_rms = 0.0f;
+    uint32_t processor_feed_count = 0;
+    uint32_t processor_output_count = 0;
+    float processor_output_rms = 0.0f;
+    uint32_t encode_drop_count = 0;
+    uint32_t send_count = 0;
+    uint32_t send_fail_count = 0;
 };
 
 class AudioService {
@@ -117,19 +124,23 @@ public:
     bool IsVoiceDetected() const { return voice_detected_; }
     bool IsIdle();
     void WaitForPlaybackQueueEmpty();
+    bool HasPlaybackWork();
     bool IsWakeWordRunning() const { return xEventGroupGetBits(event_group_) & AS_EVENT_WAKE_WORD_RUNNING; }
     bool IsAudioProcessorRunning() const { return xEventGroupGetBits(event_group_) & AS_EVENT_AUDIO_PROCESSOR_RUNNING; }
     bool IsAfeWakeWord();
 
     void EnableWakeWordDetection(bool enable);
     void EnableVoiceProcessing(bool enable);
+    void ResetVoiceProcessor();
     void EnableAudioTesting(bool enable);
     void EnableDeviceAec(bool enable);
 
     void SetCallbacks(AudioServiceCallbacks& callbacks);
 
     bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
+    void ClearUploadQueues();
     std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
+    void NotifyPacketSent(bool success);
     void PlaySound(const std::string_view& sound);
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
     void ResetDecoder();
@@ -180,6 +191,8 @@ private:
     bool voice_detected_ = false;
     bool service_stopped_ = true;
     bool audio_input_need_warmup_ = false;
+    bool playback_active_ = false;
+    int64_t last_voice_pipeline_probe_us_ = 0;
 
     esp_timer_handle_t audio_power_timer_ = nullptr;
     std::chrono::steady_clock::time_point last_input_time_;
@@ -188,7 +201,9 @@ private:
     void AudioInputTask();
     void AudioOutputTask();
     void OpusCodecTask();
-    void PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm);
+    void PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm, bool wait = true);
+    void LogVoicePipelineProbe();
+    bool IsPlaybackTailGuardActiveLocked() const;
     void SetDecodeSampleRate(int sample_rate, int frame_duration);
     void CheckAndUpdateAudioPowerState();
 };
