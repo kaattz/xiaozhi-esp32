@@ -229,6 +229,11 @@ private:
             app.ToggleChatState();
         });
 
+        center_button_.OnLongPress([this]() {
+            ESP_LOGI(TAG, "Voice PE center button long pressed, entering WiFi config mode");
+            EnterWifiConfigMode();
+        });
+
         center_button_.OnDoubleClick([this]() {
             auto& app = Application::GetInstance();
             auto state = app.GetDeviceState();

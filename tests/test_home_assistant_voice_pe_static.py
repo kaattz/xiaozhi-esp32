@@ -189,6 +189,20 @@ def test_voice_pe_mute_switch_blocks_microphone_entry_without_muting_speaker():
     assert "SetOutputVolume(0)" not in board
 
 
+def test_voice_pe_center_button_long_press_enters_wifi_config_mode():
+    board = read("main/boards/home-assistant-voice-pe/home_assistant_voice_pe_board.cc")
+
+    assert "center_button_.OnLongPress([this]()" in board
+    long_press_handler = board[
+        board.index("center_button_.OnLongPress([this]()") :
+        board.index("center_button_.OnDoubleClick([this]()")
+    ]
+    assert "Voice PE center button long pressed" in long_press_handler
+    assert "EnterWifiConfigMode()" in long_press_handler
+    assert "app.ToggleChatState()" not in long_press_handler
+    assert "PlayTestTone" not in long_press_handler
+
+
 def test_voice_pe_rotary_encoder_schedules_volume_changes_on_main_task():
     board = read("main/boards/home-assistant-voice-pe/home_assistant_voice_pe_board.cc")
 
