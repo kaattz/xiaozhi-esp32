@@ -120,11 +120,12 @@ def test_voice_pe_interaction_gpio_constants_and_wake_aec_config_are_declared():
         ("VOICE_PE_ENCODER_B_GPIO", "GPIO_NUM_18"),
         ("VOICE_PE_JACK_DETECT_GPIO", "GPIO_NUM_17"),
         ("VOICE_PE_JACK_INSERTED_LEVEL", "1"),
-        ("VOICE_PE_VOLUME_STEP", "10"),
+        ("VOICE_PE_VOLUME_STEP", "5"),
     ]:
         assert f"#define {name}" in config
         assert value in config
 
+    assert "#define VOICE_PE_VOLUME_STEP            5" in config
     assert "#define AUDIO_INPUT_REFERENCE    true" in config
     assert "CONFIG_WAKE_WORD_DISABLED=y" not in config_json
     assert "CONFIG_USE_AFE_WAKE_WORD=y" in config_json

@@ -32,7 +32,7 @@
 
 #define VOICE_PE_ENCODER_A_GPIO         GPIO_NUM_16
 #define VOICE_PE_ENCODER_B_GPIO         GPIO_NUM_18
-#define VOICE_PE_VOLUME_STEP            10
+#define VOICE_PE_VOLUME_STEP            5
 
 #define VOICE_PE_JACK_DETECT_GPIO       GPIO_NUM_17
 #define VOICE_PE_JACK_INSERTED_LEVEL    1
