@@ -56,7 +56,8 @@ flowchart LR
 | `duplex_` 被误关 | TTS 播放期间无法保持必要采集/打断路径 | 将 `duplex_` 和 `input_reference_` 解耦，测试要求 `duplex_=true`。 |
 | XU316 playback reference path 无法证明 | 不能确认 XU316 AEC 生效 | 暂停并更新 Spec；不能用 ESP32 reference FIFO 代替。 |
 | 唤醒和语音继续共用同一 slot | 偏离官方 Voice PE 设计，AGC/NS 职责混淆 | 静态测试证明 `kWakeWordMicSlot = 1`、`kVoiceMicSlot = 0`，硬件日志能看到用途切换。 |
-| AGC 通道噪声偏高 | 语音上传质量可能下降 | 本 feature 不顺手改增益；先用 raw/output RMS 定位，再单独调参。 |
+| 32-bit mic 转 int16 缩放错误 | 安静环境 raw/out RMS 接近满幅，STT 输入削顶 | 对齐 ESPHome Q31 口径：右移 16 位转 Q15；wake 再乘官方 `gain_factor: 4`，voice 保持 1:1。 |
+| AGC 通道噪声偏高 | 语音上传质量可能下降 | 语音上传先对齐官方 `volume_multiplier: 1`，不套用唤醒增益；再用 raw/output RMS 和削顶比例定位。 |
 | speaking 后立即听到自己 | 把 TTS 尾音当用户语音 | TTS stop 先 drain playback，再切 listening；等待 active playback 结束，并保留 `kPlaybackTailGuardMs = 200ms` 尾音窗口。 |
 | AFE `FEED` ringbuffer 满 | fetch 线程被上行编码队列反压，导致输入丢失 | voice processor 输出入队不能阻塞 AFE fetch；队列满时丢弃过期上行帧、保留最新帧。 |
 | speaking 阶段仍有回声 ASR | 播放尾音、XU316 reference path 或已排队上行帧被服务器识别成用户语音 | Voice PE 当前使用 auto 收音模式，speaking 阶段不运行服务器上传链路；自由边播边听等 XU316 reference path 实测可靠后再启用。 |
@@ -94,5 +95,5 @@ flowchart LR
 | 协议改造 | 现有小智唤醒流程已可复用。 |
 | ESP32 device AEC / server AEC | Voice PE 目标分工是 XU316 做 AEC/NS/AGC/远场前处理。 |
 | ESP32 二次 NS/AGC | 会叠加处理 XU316 已处理过的音频，定位困难。 |
-| 输入增益调参 | channel 分工先独立落地，避免把 AGC 噪声和增益变化混在一起。 |
+| 经验性输入增益调参 | 语音上传只做官方 1:1 增益对齐，不继续按主观听感叠加后处理增益。 |
 | XU316 pipeline 自定义调参 | 官方默认就是 channel 0 = AGC、channel 1 = NS，本 feature 只对齐和验证，不调内部 stage 参数。 |

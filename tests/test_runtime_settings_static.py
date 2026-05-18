@@ -64,3 +64,5 @@ def test_wake_arbitration_timeout_and_cost_logging_are_configured():
     assert "kWakeArbitrationTimeoutMs = 2000" in source
     assert "http->SetTimeout(kWakeArbitrationTimeoutMs)" in source
     assert "Wake arbitration cost:" in source
+    assert "%lld ms" not in source
+    assert "Wake arbitration cost: %d ms" in source

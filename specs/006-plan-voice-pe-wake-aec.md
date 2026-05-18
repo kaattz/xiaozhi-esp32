@@ -40,7 +40,7 @@
 - 确认 `duplex_` 需要和 `input_reference_` 解耦：保留同时播放/采集能力，但 `input_reference_=false`、`input_channels_=1` 或等价实现。
 - 确认官方 Voice PE 通道分工：`micro_wake_word` 使用 channel 1 / NS，`voice_assistant` 使用 channel 0 / AGC。
 - 确认 XU316 pipeline stage 目标：channel 0 = AGC，channel 1 = NS。
-- 确认本 feature 只切换用途对应的 slot，不同时修改输入增益、32-bit 到 int16 转换和 RMS 口径。若 AGC 通道噪声偏高，先记录 raw mic RMS 和 AFE output RMS，再另开调参。
+- 确认本 feature 对齐官方用途对应的 slot 和缩放：32-bit mic sample 按 Q31 -> Q15 右移 16 位转成 int16；唤醒 slot 使用官方 `gain_factor: 4`，语音上传 slot 0 必须保持 1:1，不套用唤醒增益。若 AGC 通道噪声偏高，先记录 raw mic RMS、AFE output RMS 和削顶比例，再另开调参。
 - 确认 005 mute 仍是本地唤醒的硬门禁。
 - 确认 `Board` 当前没有通用 mute 查询接口，需要新增默认 false 的 `IsMicrophoneMuted()`。
 - 确认启动日志可记录 free PSRAM；WakeNet + AFE 后 PSRAM 不足时暂停。
@@ -170,9 +170,9 @@
 - `Read()` 输出 XU316 处理后的单路 mic，不输出 interleaved `mic,reference`。
 - 若 `AUDIO_INPUT_REFERENCE` 仍存在，必须改为 false 或拆分出新宏，不能再同时控制 full-duplex 和 ESP32 AFE reference。
 - 不改 XU316 pipeline stage；继续保持 channel 0 = AGC、channel 1 = NS。
-- 不改 `SaturateMicSample()`、输入增益和 RMS 口径。
+- `SaturateMicSample()` 只保留 32-bit Q31 到 int16 Q15 转换和按用途传入的增益；语音上传 slot 0 使用 1:1 增益，唤醒 slot 1 使用官方 `gain_factor: 4`。
 - mic probe 或等价调试日志必须能看出 wake 阶段 `slot=1`、voice processing 阶段 `slot=0`。
-- 记录切换前后的同口径 RMS：NS slot 1 wake raw/out RMS、AGC slot 0 voice raw/out RMS。若 AGC 通道噪声偏高，只记录并暂停调参，不在本任务内改输入增益。
+- 记录切换前后的同口径 RMS：NS slot 1 wake raw/out RMS、AGC slot 0 voice raw/out RMS。若 AGC 通道噪声偏高，只记录并暂停调参，不继续给语音上传通道叠加后处理增益。
 
 <verify>
 
@@ -287,7 +287,7 @@
 - 确认没有加入自定义唤醒词。
 - 确认没有做 Grove、电源扩展、XMOS DFU、耳机路由。
 - 确认没有改小智协议。
-- 确认没有改变 mic 转换、输入增益和 RMS 口径。
+- 确认 mic 基础转换是 Q31 -> Q15 右移 16 位，且 RMS 口径不变；确认语音上传 slot 0 是 1:1 增益，未套用唤醒增益。
 - 确认 Voice PE slot 分工与官方一致：wake word = channel 1 / NS，voice processing/upload = channel 0 / AGC。
 - 确认 Voice PE 主链路没有 ESP32 device AEC、server AEC 或二次 NS/AGC。
 - 确认 full-duplex 没有被 `input_reference_` 误关。

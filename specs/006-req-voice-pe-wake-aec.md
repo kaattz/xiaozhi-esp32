@@ -43,14 +43,14 @@ Voice PE 的音频前端由 XU316 负责：AEC 回声消除、NS 噪声抑制、
 | REQ-9 | ESP32 必须正确初始化 XU316，并保持官方默认 pipeline：channel 0 = AGC，channel 1 = NS。 |
 | REQ-10 | ESP32 必须通过 I2S 读取 XU316 处理后的麦克风音频，语音上传不得改走未处理原始双麦数据。 |
 | REQ-11 | ESP32 必须通过官方播放输出路径把 TTS/提示音 PCM 送到 Voice PE 音频硬件，使 XU316 有机会使用播放参考；如果无法证明该路径成立，必须暂停并更新 Spec，不能宣称 XU316 AEC 完成。 |
-| REQ-12 | XU316 分工不得改变 004 已确定的麦克风 32-bit 到 int16 转换方式、24 倍主观等效增益和 RMS 口径。 |
+| REQ-12 | XU316 分工必须使用 32-bit Q31 到 int16 Q15 的基础转换，也就是右移 16 位；语音上传通道必须对齐官方 `voice_assistant.volume_multiplier: 1`，不得套用唤醒通道增益。 |
 | REQ-13 | 006 实施后必须保持按钮触发问答可用。 |
 | REQ-14 | 006 实施后必须保持 005 的 LED、mute、旋钮功能可用。 |
 | REQ-15 | 006 不做 Grove、电源扩展、XMOS DFU、耳机音频路由、远程唤醒仲裁。 |
 | REQ-16 | 第一版不设量化唤醒率指标；如果实测误唤醒明显影响使用，例如每小时超过 3 次，必须记录日志并评估阈值或模型配置，不能直接放行。 |
 | REQ-17 | Voice PE 必须对齐官方 ESPHome channel 用法：本地唤醒读取 XMOS channel 1 / NS，语音处理和上传读取 XMOS channel 0 / AGC。 |
 | REQ-18 | `AudioInputPurpose::kWakeWord` 必须选择 slot 1，`AudioInputPurpose::kVoiceProcessing` 必须选择 slot 0；不能继续让唤醒和语音上传固定走同一个 slot。 |
-| REQ-19 | 本 feature 只切换输入用途到官方 channel 分工，不同时修改 32-bit 到 int16 转换、输入增益、RMS 口径或 XU316 pipeline stage。 |
+| REQ-19 | 本 feature 只切换输入用途到官方 channel 分工，并保持语音上传通道 1:1 增益；不得修改 32-bit Q31 到 int16 Q15 的转换口径、RMS 口径或 XU316 pipeline stage。 |
 
 ## 验收标准
 
@@ -78,7 +78,7 @@ Voice PE 的音频前端由 XU316 负责：AEC 回声消除、NS 噪声抑制、
 | 不做 XMOS DFU | 属于维护能力，不是唤醒/AEC 主链路。 |
 | 不做 Grove / 电源扩展 | 与本地唤醒和 XU316 前端 DSP 分工无关。 |
 | 不改小智协议 | 复用现有 `SendWakeWordDetected()` 和音频流。 |
-| 不调输入增益 | channel 分工先独立验证，避免把通道切换和增益调参混在一起。 |
+| 不做经验性输入增益调参 | 语音上传通道只对齐官方 1:1；不按主观听感继续加后处理增益。 |
 | 不改 XU316 stage | 官方默认已是 `channel0=AGC`、`channel1=NS`，本 feature 只改 ESP32 读取哪个 slot。 |
 
 ## 需求追踪

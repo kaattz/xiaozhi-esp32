@@ -34,8 +34,8 @@ WakeArbitrationDecision ParseWakeArbitrationDecision(const std::string& response
 bool WakeArbiterClient::RequestSession(const std::string& wake_word, float wake_rms_dbfs) {
     auto start_time_us = esp_timer_get_time();
     auto log_cost = [start_time_us]() {
-        auto cost_ms = (esp_timer_get_time() - start_time_us) / 1000;
-        ESP_LOGI(TAG, "Wake arbitration cost: %lld ms", static_cast<long long>(cost_ms));
+        int cost_ms = static_cast<int>((esp_timer_get_time() - start_time_us) / 1000);
+        ESP_LOGI(TAG, "Wake arbitration cost: %d ms", cost_ms);
     };
 
     auto url = BuildEndpointUrl("/wake-detected");

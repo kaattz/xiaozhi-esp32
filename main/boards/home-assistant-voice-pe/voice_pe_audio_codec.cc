@@ -18,9 +18,11 @@ namespace {
 constexpr int kMicSlotCount = 2;
 constexpr int kWakeWordMicSlot = 1;
 constexpr int kVoiceMicSlot = 0;
-constexpr int kMicSampleShift = 8;
-constexpr int kMicGainNumerator = 3;
-constexpr int kMicGainDenominator = 2;
+constexpr int kMicSampleShift = 16;
+constexpr int kWakeWordMicGainNumerator = 4;
+constexpr int kWakeWordMicGainDenominator = 1;
+constexpr int kVoiceMicGainNumerator = 1;
+constexpr int kVoiceMicGainDenominator = 1;
 constexpr int kOutputSlotCount = 2;
 constexpr int64_t kOutputProbeIntervalUs = 2000 * 1000;
 constexpr int kToneSampleRate = AUDIO_OUTPUT_SAMPLE_RATE;
@@ -176,9 +178,9 @@ void VoicePeAudioCodec::InitializeInputI2s() {
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(rx_handle_, &rx_std_cfg));
 }
 
-int16_t VoicePeAudioCodec::SaturateMicSample(int32_t sample) {
+int16_t VoicePeAudioCodec::SaturateMicSample(int32_t sample, int gain_numerator, int gain_denominator) {
     int64_t value = sample >> kMicSampleShift;
-    value = value * kMicGainNumerator / kMicGainDenominator;
+    value = value * gain_numerator / gain_denominator;
     if (value > INT16_MAX) {
         return INT16_MAX;
     }
@@ -211,8 +213,15 @@ int VoicePeAudioCodec::Read(int16_t* dest, int samples) {
     int frames = bytes_read / (sizeof(int32_t) * kMicSlotCount);
     frames = std::min(frames, frames_requested);
     std::vector<int16_t> mic_data(frames);
+    const int gain_numerator = selected_mic_slot_ == kWakeWordMicSlot
+        ? kWakeWordMicGainNumerator
+        : kVoiceMicGainNumerator;
+    const int gain_denominator = selected_mic_slot_ == kWakeWordMicSlot
+        ? kWakeWordMicGainDenominator
+        : kVoiceMicGainDenominator;
     for (int i = 0; i < frames; ++i) {
-        mic_data[i] = SaturateMicSample(bit32_buffer[i * kMicSlotCount + selected_mic_slot_]);
+        mic_data[i] = SaturateMicSample(
+            bit32_buffer[i * kMicSlotCount + selected_mic_slot_], gain_numerator, gain_denominator);
     }
     LogMicProbe(mic_data.data(), frames);
 

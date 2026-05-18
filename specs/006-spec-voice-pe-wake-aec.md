@@ -19,9 +19,9 @@
 | `main/audio/processors/afe_audio_processor.cc` | 该路径可按 `CONFIG_USE_DEVICE_AEC`、`CONFIG_USE_SERVER_AEC` 和 `codec_->input_reference()` 组 AFE 输入；Voice PE 目标实现必须避免在主语音上传链路启用 ESP32 AEC/NS/AGC 叠加处理。 |
 | `main/boards/common/board.h` | 当前没有麦克风静音查询接口；006 需要新增默认 false 的 `IsMicrophoneMuted()`，由 Voice PE override。 |
 | `main/boards/home-assistant-voice-pe/voice_pe_audio_codec.cc` | 当前 `input_reference_` 和 `input_channels_` 按 `AUDIO_INPUT_REFERENCE` 输出 mic + reference，且 `kVoiceMicSlot` 仍未对齐官方 channel 0；目标实现要保留 full-duplex，但主上传输入改为 XU316 处理后的单路 mic。 |
-| 官方 ESPHome `home-assistant-voice.yaml` | `micro_wake_word` 使用 `channels: 1`，`voice_assistant` 使用 `channels: 0`；这是 Voice PE 官方 channel 分工。 |
+| 官方 ESPHome `home-assistant-voice.yaml` | `micro_wake_word` 使用 `channels: 1` 和 `gain_factor: 4`，`voice_assistant` 使用 `channels: 0`、`noise_suppression_level: 0`、`auto_gain: 0 dbfs`、`volume_multiplier: 1`；这是 Voice PE 官方 channel 分工和语音上传增益边界。 |
 | 官方 ESPHome `voice_kit` 组件 | 默认 `channel_0_stage=AGC`、`channel_1_stage=NS`，并在 XU316 初始化后写入 pipeline stage。 |
-| `specs/004-*` | 004 固定了 16 kHz mic 输入、48 kHz speaker 输出、32-bit 到 int16 转换和 24 倍主观等效输入增益。 |
+| `specs/004-*` | 004 固定了 16 kHz mic 输入和 48 kHz speaker 输出；006 对齐官方实现后，32-bit mic 输入按 Q31 -> Q15 右移 16 位转成 int16，语音上传通道不得继续套用唤醒通道增益。 |
 | `specs/005-*` | 005 固定了 mute 是麦克风隐私开关，mute 打开时必须阻止听音入口。 |
 
 ## 总体流程
@@ -80,7 +80,7 @@ flowchart TD
 | full-duplex | 保留同时播放和采集能力；`duplex_` 不能再被 `input_reference_` 绑死。目标是 `duplex_=true`、`input_reference_=false`、`input_channels_=1` 或等价实现。 |
 | ESP32 AEC/NS/AGC | Voice PE 主链路不得启用 `CONFIG_USE_DEVICE_AEC`、`CONFIG_USE_SERVER_AEC`，不得在 XU316 后叠加第二套 NS/AGC。 |
 | TTS playback reference | ESP32 必须继续通过官方播放路径输出 TTS/提示音 PCM，让 Voice PE 音频硬件/XU316 能获得播放参考。若无法证明 XU316 可使用该路径作为回声参考，必须暂停并更新 Spec，不能宣称 XU316 AEC 完成。 |
-| 转换和增益 | 切换 channel 时必须保持 `SaturateMicSample()`、32-bit 到 int16 转换、24 倍主观等效输入增益和 RMS 口径不变。若 AGC 通道实测噪声偏高，只记录 raw/out RMS 并另开调参。 |
+| 转换和增益 | 32-bit I2S mic sample 按 Q31 -> Q15 右移 16 位转成 int16；唤醒 slot 使用官方 `gain_factor: 4`，语音上传 slot 0 对齐官方 `volume_multiplier: 1`，不得额外放大。若 AGC 通道实测噪声偏高，只记录 raw/out RMS 和削顶比例，不做经验性后处理调参。 |
 | speaking 上行策略 | Voice PE 在 `speaking` 阶段不运行服务器上传链路；TTS 播放收尾后、切回 `listening` 前，必须重置本地 voice processor/AFe 缓冲，并清理上行 encode queue 和 send queue 中的残留语音帧。当前阶段默认 `auto` 收音模式，只保留本地唤醒词或中心按钮打断。自由边播边听必须等 XU316 playback reference 路径实测可靠后再启用。 |
 | 实时上行反压 | AFE fetch 线程不能被 Opus 上行队列阻塞。编码队列满时丢弃过期上行帧并保留最新帧，避免 AFE `FEED` ringbuffer 爆满。 |
 | 服务器收音重臂 | 普通板卡遵循官方小智 realtime 连续流语义：只有新开收音窗口、播放提示音入口或本地 voice processor 未运行时才发送 `listen/start` 并启动 voice processor；Voice PE 当前使用 `auto` 模式，避免 speaking 阶段连续上行造成重复 ASR。 |

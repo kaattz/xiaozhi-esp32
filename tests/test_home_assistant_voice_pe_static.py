@@ -59,16 +59,21 @@ def test_voice_pe_audio_codec_declares_real_sample_rates_and_pcm_conversion():
     assert "VOICE_PE_SPK_BCLK_GPIO" in source
     assert "kWakeWordMicSlot = 1" in source
     assert "kVoiceMicSlot = 0" in source
-    assert "kMicSampleShift = 8" in source
-    assert "kMicGainNumerator = 3" in source
-    assert "kMicGainDenominator = 2" in source
+    assert "kMicSampleShift = 16" in source
+    assert "kWakeWordMicGainNumerator = 4" in source
+    assert "kWakeWordMicGainDenominator = 1" in source
+    assert "kVoiceMicGainNumerator = 1" in source
+    assert "kVoiceMicGainDenominator = 1" in source
+    assert "kMicGainNumerator" not in source
     assert source.count("I2S_ROLE_SLAVE") == 2
     assert "I2S_ROLE_MASTER" not in source
     assert "i2s_mode: secondary" in source
     assert "kMicReadTimeoutMs = 200" in source
     assert "pdMS_TO_TICKS(200)" not in source
     assert ">> kMicSampleShift" in source
-    assert "* kMicGainNumerator / kMicGainDenominator" in source
+    assert "SaturateMicSample(" in source
+    assert "gain_numerator, gain_denominator" in source
+    assert "selected_mic_slot_ == kWakeWordMicSlot" in source
     assert "INT16_MIN" in source
     assert "INT16_MAX" in source
     assert "Aic3204AudioDac" in header

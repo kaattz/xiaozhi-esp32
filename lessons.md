@@ -11,7 +11,7 @@
 - 写音频硬件适配文档时，必须钉死采样率转换责任边界、32-bit 到 16-bit PCM 转换方式、外部寄存器序列的具体 commit，以及硬件启动超时/重试策略。
 - 写硬件实施计划时，音频输入、音频输出、codec 集成要拆成独立验证步骤；外部资料取证必须有本地产出物；硬件验证失败必须暂停并更新 Spec，不能边猜边继续。
 - 当评审指出文档“没有说明”但内容已存在时，不能只说已写；要把约束改得更显眼，补代码责任边界和源码路径，避免实施时读错。
-- Voice PE 麦克风实测：XMOS `channel1=NS` 比 `channel0=AGC` 底噪低；24 倍固定增益主观音量够用，48 倍没有明显更响但底噪更大，第一阶段固定 24 倍。
+- Voice PE 麦克风早期实测：XMOS `channel1=NS` 比 `channel0=AGC` 底噪低；24 倍固定增益是 004 单通道/唤醒阶段经验，后续语音上传 slot 0 必须以官方 `volume_multiplier: 1` 为准，不能套用唤醒增益。
 - 用户的 `kaattz/xiaozhi-esp32` 是自己的目标仓库时，不要默认建议向 `78/xiaozhi-esp32` 提 PR；应先确认是 fork 贡献上游，还是只在用户自己的仓库合并发布。
 - 写 Voice PE 交互类硬件需求时，必须显式定义 mute 在 speaking 状态下是否中断 TTS、物理开关 debounce 策略、非主线程硬件回调是否需要调度到主任务，以及复杂硬件任务是否要拆成 GPIO 探测和行为接入两步。
 - Voice PE AEC reference 没有播放时为空是正常状态，不能把 idle/纯听音期间的 reference underrun 当警告刷屏；underrun 诊断必须只在最近有播放 reference 写入的窗口内输出。
@@ -62,3 +62,5 @@
 - Voice PE 使用 HA 外部音箱播放时，XU316 拿不到该音箱的播放 reference，AEC/自由抢话不能按本机喇叭路径处理；第一版应暂停 ASR 上传，只保留唤醒词或按钮打断，播放结束后再恢复正常监听。
 - Voice PE 的 HA `media_player` 外放如果追求低延时，不能默认转码 MP3；应优先评估把小智 Opus 帧封装成 Ogg Opus 流直通，只有目标播放器不支持时才转码为 MP3/AAC 兼容流。
 - Voice PE HA 外放设计必须明确四个边界：上传 gateway 前 ESP32 已完成小智协议解密，gateway 收到裸 Opus；同设备并发 playback session 要有 supersede/cancel 策略；gateway 必须配置 HA/播放器可访问的 public stream URL；首字延迟超过 3 秒要拆分记录 Voice PE、gateway、HA 和播放器耗时。
+- Voice PE STT 变差时，不能先怀疑官方 channel 分工；官方仍是 `micro_wake_word.channels: 1` 加 `gain_factor: 4`，`voice_assistant.channels: 0` 且 `volume_multiplier: 1`。应先检查小智适配是否对语音 channel 0 额外放大、缩放或经过不同 AFE 处理。
+- Voice PE 安静 listening 的 `raw_rms/out_rms` 若仍在 2 万以上，优先检查 32-bit I2S 到 int16 的缩放口径；ESPHome 音频工具按 Q31 处理 32-bit sample，送 xiaozhi int16 时应右移 16 位成 Q15，不能右移 8 位导致接近满幅。

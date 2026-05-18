@@ -20,7 +20,7 @@ public:
     virtual void SetInputPurpose(AudioInputPurpose purpose) override;
 
     void PlayTestTone(int duration_ms);
-    static int16_t SaturateMicSample(int32_t sample);
+    static int16_t SaturateMicSample(int32_t sample, int gain_numerator, int gain_denominator);
 
 protected:
     virtual int Read(int16_t* dest, int samples) override;
