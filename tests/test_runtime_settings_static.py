@@ -13,6 +13,7 @@ def test_advanced_page_exposes_runtime_switches():
 
     assert "auto_firmware_upgrade" in html
     assert "wake_arbitration_enabled" in html
+    assert "wake_arbitration_gateway_url" in html
 
 
 def test_advanced_config_persists_runtime_switches():
@@ -21,12 +22,29 @@ def test_advanced_config_persists_runtime_switches():
 
     assert "auto_firmware_upgrade_" in header
     assert "wake_arbitration_enabled_" in header
+    assert "wake_arbitration_gateway_url_" in header
     assert '"auto_firmware_upgrade"' in source
     assert '"wake_arbitration_enabled"' in source
+    assert '"wake_arbitration_gateway_url"' in source
     assert 'kAutoFirmwareUpgradeKey = "auto_fw_upg"' in source
     assert 'kWakeArbitrationEnabledKey = "wake_arb"' in source
+    assert 'kWakeArbitrationGatewayUrlKey = "wake_arb_url"' in source
     assert "nvs_set_u8(nvs, kAutoFirmwareUpgradeKey" in source
     assert "nvs_set_u8(nvs, kWakeArbitrationEnabledKey" in source
+    assert "nvs_set_str(nvs, kWakeArbitrationGatewayUrlKey" in source
+
+
+def test_gateway_clients_prefer_runtime_url_with_sdkconfig_fallback():
+    helper = read("main/gateway_url.h")
+    wake_source = read("main/wake_arbiter_client.cc")
+    announcement_source = read("main/announcement_audio_client.cc")
+
+    assert 'kWakeArbitrationGatewayUrlKey = "wake_arb_url"' in helper
+    assert 'Settings settings("wifi", false)' in helper
+    assert "CONFIG_WAKE_ARBITRATION_GATEWAY_URL" in helper
+    assert "if (gateway_url.empty())" in helper
+    assert "GetWakeArbitrationGatewayUrl" in wake_source
+    assert "GetWakeArbitrationGatewayUrl" in announcement_source
 
 
 def test_application_uses_runtime_switches():
@@ -43,6 +61,6 @@ def test_application_uses_runtime_switches():
 def test_wake_arbitration_timeout_and_cost_logging_are_configured():
     source = read("main/wake_arbiter_client.cc")
 
-    assert "kWakeArbitrationTimeoutMs = 800" in source
+    assert "kWakeArbitrationTimeoutMs = 2000" in source
     assert "http->SetTimeout(kWakeArbitrationTimeoutMs)" in source
     assert "Wake arbitration cost:" in source

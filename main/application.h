@@ -17,6 +17,8 @@
 #include "audio_service.h"
 #include "device_state.h"
 #include "device_state_machine.h"
+#include "ha_playback_settings.h"
+#include "ha_playback_client.h"
 
 // Main event bits
 #define MAIN_EVENT_SCHEDULE             (1 << 0)
@@ -149,6 +151,18 @@ private:
     bool error_alert_active_ = false;
     uint32_t tts_start_decode_packet_count_ = 0;
     std::string current_tts_text_;
+    struct PendingHaPlaybackPacket {
+        std::vector<uint8_t> payload;
+        int sample_rate = 0;
+        int frame_duration_ms = 0;
+        uint32_t timestamp = 0;
+    };
+    HaPlaybackSettings ha_playback_settings_;
+    std::shared_ptr<HaPlaybackClient> ha_playback_client_;
+    std::deque<PendingHaPlaybackPacket> ha_playback_pending_packets_;
+    bool ha_playback_active_ = false;
+    bool ha_local_volume_overridden_ = false;
+    int ha_previous_output_volume_ = 0;
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 
@@ -176,7 +190,14 @@ private:
     void LoadRuntimeSettings();
     bool IsAutoFirmwareUpgradeEnabled() const;
     bool IsWakeArbitrationEnabled() const;
+    bool IsHaPlaybackMode() const;
     void InitializeProtocol();
+    bool StartHaPlaybackSession(int sample_rate, int frame_duration_ms);
+    void HandleIncomingHaPlaybackAudio(std::vector<uint8_t>&& payload, int sample_rate, int frame_duration_ms, uint32_t timestamp);
+    void FinishHaPlaybackSession();
+    void CompleteHaPlaybackSession(const std::string& session_id, HaPlaybackResult result, uint32_t frame_count, uint32_t audio_ms);
+    void CancelHaPlaybackSession();
+    void RestoreLocalOutputVolume();
     void ShowActivationCode(const std::string& code, const std::string& message);
     void SetListeningMode(ListeningMode mode);
     ListeningMode GetDefaultListeningMode() const;

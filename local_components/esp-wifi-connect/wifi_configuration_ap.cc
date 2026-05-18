@@ -13,6 +13,8 @@
 #include <nvs.h>
 #include <nvs_flash.h>
 #include <cJSON.h>
+#include <cctype>
+#include <cstring>
 #if !CONFIG_IDF_TARGET_ESP32P4
 #include <esp_smartconfig.h>
 #endif
@@ -24,7 +26,9 @@
 namespace {
 constexpr const char* kAutoFirmwareUpgradeKey = "auto_fw_upg";
 constexpr const char* kWakeArbitrationEnabledKey = "wake_arb";
+constexpr const char* kWakeArbitrationGatewayUrlKey = "wake_arb_url";
 constexpr const char* kHaMqttNamespace = "ha_mqtt";
+constexpr const char* kHaPlaybackNamespace = "ha_playback";
 
 std::string ReadNvsString(nvs_handle_t nvs, const char* key, const char* default_value = "") {
     size_t size = 0;
@@ -42,6 +46,21 @@ std::string ReadNvsString(nvs_handle_t nvs, const char* key, const char* default
 
 bool IsStringItemValid(const cJSON* item, size_t max_length) {
     return cJSON_IsString(item) && item->valuestring != nullptr && strlen(item->valuestring) <= max_length;
+}
+
+std::string TrimCopy(const char* value) {
+    if (value == nullptr) {
+        return "";
+    }
+
+    std::string result(value);
+    while (!result.empty() && std::isspace(static_cast<unsigned char>(result.front()))) {
+        result.erase(result.begin());
+    }
+    while (!result.empty() && std::isspace(static_cast<unsigned char>(result.back()))) {
+        result.pop_back();
+    }
+    return result;
 }
 }
 
@@ -62,8 +81,13 @@ WifiConfigurationAp::WifiConfigurationAp()
     remember_bssid_ = false;
     auto_firmware_upgrade_ = false;
     wake_arbitration_enabled_ = false;
+    wake_arbitration_gateway_url_.clear();
     ha_mqtt_enabled_ = false;
     ha_mqtt_port_ = 1883;
+    ha_playback_tts_output_ = "local";
+    ha_playback_timeout_ms_ = 60000;
+    ha_playback_restore_listening_ = true;
+    ha_playback_local_volume_when_ha_output_ = 0;
 }
 
 std::vector<wifi_ap_record_t> WifiConfigurationAp::GetAccessPoints()
@@ -257,11 +281,13 @@ void WifiConfigurationAp::StartAccessPoint()
         } else {
             wake_arbitration_enabled_ = false; // 默认关闭
         }
+        wake_arbitration_gateway_url_ = ReadNvsString(nvs, kWakeArbitrationGatewayUrlKey);
 
         nvs_close(nvs);
     }
 
     LoadHaMqttSettings();
+    LoadHaPlaybackSettings();
 }
 
 void WifiConfigurationAp::StartWebServer()
@@ -576,6 +602,8 @@ void WifiConfigurationAp::StartWebServer()
             cJSON_AddBoolToObject(json, "sleep_mode", this_->sleep_mode_);
             cJSON_AddBoolToObject(json, "auto_firmware_upgrade", this_->auto_firmware_upgrade_);
             cJSON_AddBoolToObject(json, "wake_arbitration_enabled", this_->wake_arbitration_enabled_);
+            cJSON_AddStringToObject(json, "wake_arbitration_gateway_url", this_->wake_arbitration_gateway_url_.c_str());
+            cJSON_AddStringToObject(json, "wake_arbitration_gateway_url_default", CONFIG_WAKE_ARBITRATION_GATEWAY_URL);
             cJSON_AddBoolToObject(json, "ha_mqtt_enabled", this_->ha_mqtt_enabled_);
             cJSON_AddStringToObject(json, "ha_mqtt_host", this_->ha_mqtt_host_.c_str());
             cJSON_AddNumberToObject(json, "ha_mqtt_port", this_->ha_mqtt_port_);
@@ -590,6 +618,16 @@ void WifiConfigurationAp::StartWebServer()
                 cJSON_AddStringToObject(ha_mqtt, "host", this_->ha_mqtt_host_.c_str());
                 cJSON_AddNumberToObject(ha_mqtt, "port", this_->ha_mqtt_port_);
                 cJSON_AddItemToObject(json, "ha_mqtt", ha_mqtt);
+            }
+
+            cJSON* ha_playback = cJSON_CreateObject();
+            if (ha_playback) {
+                cJSON_AddStringToObject(ha_playback, "tts_output", this_->ha_playback_tts_output_.c_str());
+                cJSON_AddStringToObject(ha_playback, "media_player_entity_id", this_->ha_playback_media_player_entity_id_.c_str());
+                cJSON_AddNumberToObject(ha_playback, "timeout_ms", this_->ha_playback_timeout_ms_);
+                cJSON_AddBoolToObject(ha_playback, "restore_listening", this_->ha_playback_restore_listening_);
+                cJSON_AddNumberToObject(ha_playback, "local_volume_when_ha_output", this_->ha_playback_local_volume_when_ha_output_);
+                cJSON_AddItemToObject(json, "ha_playback", ha_playback);
             }
 
             // 发送JSON响应
@@ -726,11 +764,46 @@ void WifiConfigurationAp::StartWebServer()
                 }
             }
 
+            cJSON *wake_arbitration_gateway_url = cJSON_GetObjectItem(json, "wake_arbitration_gateway_url");
+            if (wake_arbitration_gateway_url != nullptr) {
+                if (!IsStringItemValid(wake_arbitration_gateway_url, 255)) {
+                    nvs_close(nvs);
+                    cJSON_Delete(json);
+                    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid wake arbitration gateway URL");
+                    return ESP_FAIL;
+                }
+
+                this_->wake_arbitration_gateway_url_ = TrimCopy(wake_arbitration_gateway_url->valuestring);
+                if (this_->wake_arbitration_gateway_url_.empty()) {
+                    err = nvs_erase_key(nvs, kWakeArbitrationGatewayUrlKey);
+                    if (err == ESP_ERR_NVS_NOT_FOUND) {
+                        err = ESP_OK;
+                    }
+                } else {
+                    err = nvs_set_str(nvs, kWakeArbitrationGatewayUrlKey, this_->wake_arbitration_gateway_url_.c_str());
+                }
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to save wake_arbitration_gateway_url: %d", err);
+                    nvs_close(nvs);
+                    cJSON_Delete(json);
+                    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to save wake arbitration gateway URL");
+                    return ESP_FAIL;
+                }
+            }
+
             err = this_->SaveHaMqttSettings(json);
             if (err != ESP_OK) {
                 nvs_close(nvs);
                 cJSON_Delete(json);
                 httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid HA MQTT configuration");
+                return ESP_FAIL;
+            }
+
+            err = this_->SaveHaPlaybackSettings(json);
+            if (err != ESP_OK) {
+                nvs_close(nvs);
+                cJSON_Delete(json);
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid HA playback configuration");
                 return ESP_FAIL;
             }
 
@@ -749,9 +822,9 @@ void WifiConfigurationAp::StartWebServer()
             httpd_resp_set_hdr(req, "Connection", "close");
             httpd_resp_send(req, "{\"success\":true}", HTTPD_RESP_USE_STRLEN);
 
-            ESP_LOGI(TAG, "Saved settings: ota_url=%s, max_tx_power=%d, remember_bssid=%d, sleep_mode=%d, auto_firmware_upgrade=%d, wake_arbitration_enabled=%d, ha_mqtt_enabled=%d, ha_mqtt_host=%s",
+            ESP_LOGI(TAG, "Saved settings: ota_url=%s, max_tx_power=%d, remember_bssid=%d, sleep_mode=%d, auto_firmware_upgrade=%d, wake_arbitration_enabled=%d, wake_arbitration_gateway_url=%s, ha_mqtt_enabled=%d, ha_mqtt_host=%s",
                 this_->ota_url_.c_str(), this_->max_tx_power_, this_->remember_bssid_, this_->sleep_mode_,
-                this_->auto_firmware_upgrade_, this_->wake_arbitration_enabled_, this_->ha_mqtt_enabled_, this_->ha_mqtt_host_.c_str());
+                this_->auto_firmware_upgrade_, this_->wake_arbitration_enabled_, this_->wake_arbitration_gateway_url_.c_str(), this_->ha_mqtt_enabled_, this_->ha_mqtt_host_.c_str());
             return ESP_OK;
         },
         .user_ctx = this
@@ -792,6 +865,41 @@ void WifiConfigurationAp::LoadHaMqttSettings()
     ha_mqtt_password_ = ReadNvsString(nvs, "password");
     ha_mqtt_client_id_ = ReadNvsString(nvs, "client_id");
     ha_mqtt_device_name_ = ReadNvsString(nvs, "device_name");
+
+    nvs_close(nvs);
+}
+
+void WifiConfigurationAp::LoadHaPlaybackSettings()
+{
+    ha_playback_tts_output_ = "local";
+    ha_playback_media_player_entity_id_.clear();
+    ha_playback_timeout_ms_ = 60000;
+    ha_playback_restore_listening_ = true;
+    ha_playback_local_volume_when_ha_output_ = 0;
+
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(kHaPlaybackNamespace, NVS_READONLY, &nvs);
+    if (err != ESP_OK) {
+        return;
+    }
+
+    ha_playback_tts_output_ = ReadNvsString(nvs, "tts_output", "local");
+    ha_playback_media_player_entity_id_ = ReadNvsString(nvs, "media_player_entity_id");
+
+    int32_t timeout_ms = 60000;
+    if (nvs_get_i32(nvs, "timeout_ms", &timeout_ms) == ESP_OK) {
+        ha_playback_timeout_ms_ = timeout_ms;
+    }
+
+    uint8_t restore_listening = 1;
+    if (nvs_get_u8(nvs, "restore_listening", &restore_listening) == ESP_OK) {
+        ha_playback_restore_listening_ = restore_listening != 0;
+    }
+
+    int32_t local_volume = 0;
+    if (nvs_get_i32(nvs, "local_volume_when_ha_output", &local_volume) == ESP_OK) {
+        ha_playback_local_volume_when_ha_output_ = local_volume;
+    }
 
     nvs_close(nvs);
 }
@@ -846,6 +954,73 @@ esp_err_t WifiConfigurationAp::SaveHaMqttSettings(const cJSON* json)
     if (err == ESP_OK) err = nvs_set_str(nvs, "password", ha_mqtt_password_.c_str());
     if (err == ESP_OK) err = nvs_set_str(nvs, "client_id", ha_mqtt_client_id_.c_str());
     if (err == ESP_OK) err = nvs_set_str(nvs, "device_name", ha_mqtt_device_name_.c_str());
+    if (err == ESP_OK) err = nvs_commit(nvs);
+
+    nvs_close(nvs);
+    return err;
+}
+
+esp_err_t WifiConfigurationAp::SaveHaPlaybackSettings(const cJSON* json)
+{
+    const auto* ha_playback = cJSON_GetObjectItem(json, "ha_playback");
+    if (ha_playback == nullptr) {
+        return ESP_OK;
+    }
+    if (!cJSON_IsObject(ha_playback)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const auto* tts_output_item = cJSON_GetObjectItem(ha_playback, "tts_output");
+    const auto* media_player_item = cJSON_GetObjectItem(ha_playback, "media_player_entity_id");
+    const auto* timeout_item = cJSON_GetObjectItem(ha_playback, "timeout_ms");
+    const auto* restore_item = cJSON_GetObjectItem(ha_playback, "restore_listening");
+    const auto* local_volume_item = cJSON_GetObjectItem(ha_playback, "local_volume_when_ha_output");
+
+    if (!IsStringItemValid(tts_output_item, 32) ||
+        !IsStringItemValid(media_player_item, 128) ||
+        !cJSON_IsNumber(timeout_item) ||
+        !cJSON_IsBool(restore_item) ||
+        !cJSON_IsNumber(local_volume_item)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const std::string tts_output = tts_output_item->valuestring;
+    if (!(tts_output == "local" || tts_output == "ha_media_player")) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const std::string media_player_entity_id = TrimCopy(media_player_item->valuestring);
+    if (tts_output == "ha_media_player" && media_player_entity_id.empty()) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const int32_t timeout_ms = timeout_item->valueint;
+    if (timeout_ms < 10000 || timeout_ms > 120000) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const int32_t local_volume = local_volume_item->valueint;
+    if (local_volume < 0 || local_volume > 100) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(kHaPlaybackNamespace, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    ha_playback_tts_output_ = tts_output;
+    ha_playback_media_player_entity_id_ = media_player_entity_id;
+    ha_playback_timeout_ms_ = timeout_ms;
+    ha_playback_restore_listening_ = cJSON_IsTrue(restore_item);
+    ha_playback_local_volume_when_ha_output_ = local_volume;
+
+    err = nvs_set_str(nvs, "tts_output", ha_playback_tts_output_.c_str());
+    if (err == ESP_OK) err = nvs_set_str(nvs, "media_player_entity_id", ha_playback_media_player_entity_id_.c_str());
+    if (err == ESP_OK) err = nvs_set_i32(nvs, "timeout_ms", ha_playback_timeout_ms_);
+    if (err == ESP_OK) err = nvs_set_u8(nvs, "restore_listening", ha_playback_restore_listening_ ? 1 : 0);
+    if (err == ESP_OK) err = nvs_set_i32(nvs, "local_volume_when_ha_output", ha_playback_local_volume_when_ha_output_);
     if (err == ESP_OK) err = nvs_commit(nvs);
 
     nvs_close(nvs);

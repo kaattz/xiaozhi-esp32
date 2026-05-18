@@ -2,6 +2,7 @@
 
 #include "application.h"
 #include "board.h"
+#include "gateway_url.h"
 #include "system_info.h"
 
 #include <cJSON.h>
@@ -217,10 +218,7 @@ bool AnnouncementAudioClient::FetchFrames(
 }
 
 std::string AnnouncementAudioClient::BuildEndpointUrl(const std::string& path) const {
-    std::string gateway_url = CONFIG_WAKE_ARBITRATION_GATEWAY_URL;
-    while (!gateway_url.empty() && gateway_url.back() == '/') {
-        gateway_url.pop_back();
-    }
+    auto gateway_url = gateway_url::GetWakeArbitrationGatewayUrl();
     if (gateway_url.empty()) {
         return "";
     }

@@ -26,6 +26,14 @@
 namespace {
 constexpr const char* kAutoFirmwareUpgradeKey = "auto_fw_upg";
 constexpr const char* kWakeArbitrationEnabledKey = "wake_arb";
+constexpr size_t kMaxPendingHaPlaybackPackets = MAX_DECODE_PACKETS_IN_QUEUE;
+
+struct HaPlaybackFinishContext {
+    Application* app = nullptr;
+    std::shared_ptr<HaPlaybackClient> client;
+    std::string session_id;
+    int timeout_ms = 0;
+};
 }
 
 Application::Application() {
@@ -231,7 +239,7 @@ void Application::Run() {
             auto& board = Board::GetInstance();
             auto state = GetDeviceState();
             bool should_upload_audio = (state == kDeviceStateListening && !audio_service_.HasPlaybackWork()) ||
-                (state == kDeviceStateSpeaking && board.ShouldUploadAudioDuringSpeaking());
+                (state == kDeviceStateSpeaking && board.ShouldUploadAudioDuringSpeaking() && !ha_playback_active_);
             while (auto packet = audio_service_.PopPacketFromSendQueue()) {
                 if (!should_upload_audio) {
                     continue;
@@ -499,8 +507,9 @@ void Application::LoadRuntimeSettings() {
     Settings settings("wifi", false);
     auto_firmware_upgrade_enabled_ = settings.GetBool(kAutoFirmwareUpgradeKey, false);
     wake_arbitration_enabled_ = settings.GetBool(kWakeArbitrationEnabledKey, false);
-    ESP_LOGI(TAG, "Runtime settings: auto_firmware_upgrade=%d, wake_arbitration_enabled=%d",
-        auto_firmware_upgrade_enabled_, wake_arbitration_enabled_);
+    ha_playback_settings_ = HaPlaybackSettings::Load();
+    ESP_LOGI(TAG, "Runtime settings: auto_firmware_upgrade=%d, wake_arbitration_enabled=%d, tts_output=%s",
+        auto_firmware_upgrade_enabled_, wake_arbitration_enabled_, ha_playback_settings_.tts_output.c_str());
 }
 
 bool Application::IsAutoFirmwareUpgradeEnabled() const {
@@ -509,6 +518,206 @@ bool Application::IsAutoFirmwareUpgradeEnabled() const {
 
 bool Application::IsWakeArbitrationEnabled() const {
     return wake_arbitration_enabled_;
+}
+
+bool Application::IsHaPlaybackMode() const {
+    return ha_playback_settings_.GetTtsOutputMode() == TtsOutputMode::kHaMediaPlayer;
+}
+
+void Application::RestoreLocalOutputVolume() {
+    if (!ha_local_volume_overridden_) {
+        return;
+    }
+
+    auto codec = Board::GetInstance().GetAudioCodec();
+    codec->SetOutputVolume(ha_previous_output_volume_);
+    ha_local_volume_overridden_ = false;
+}
+
+bool Application::StartHaPlaybackSession(int sample_rate, int frame_duration_ms) {
+    if (!ha_playback_settings_.IsValid()) {
+        ESP_LOGE(TAG, "HA playback settings invalid");
+        RestoreLocalOutputVolume();
+        ha_playback_active_ = false;
+        return false;
+    }
+
+    auto codec = Board::GetInstance().GetAudioCodec();
+    if (!ha_local_volume_overridden_) {
+        ha_previous_output_volume_ = codec->output_volume();
+        ha_local_volume_overridden_ = true;
+    }
+    codec->SetOutputVolume(ha_playback_settings_.local_volume_when_ha_output);
+
+    ha_playback_client_ = std::make_shared<HaPlaybackClient>();
+    if (!ha_playback_client_->CreateSession(ha_playback_settings_, sample_rate, frame_duration_ms) ||
+        !ha_playback_client_->StartUpload()) {
+        ESP_LOGE(TAG, "Failed to start HA playback session");
+        ha_playback_client_.reset();
+        ha_playback_active_ = false;
+        ha_playback_pending_packets_.clear();
+        RestoreLocalOutputVolume();
+        return false;
+    }
+
+    ha_playback_active_ = true;
+    ESP_LOGI(TAG, "HA playback started: session=%s pending=%u sr=%d frame=%d",
+        ha_playback_client_->session_id().c_str(),
+        static_cast<unsigned>(ha_playback_pending_packets_.size()),
+        sample_rate,
+        frame_duration_ms);
+
+    while (!ha_playback_pending_packets_.empty()) {
+        auto packet = std::move(ha_playback_pending_packets_.front());
+        ha_playback_pending_packets_.pop_front();
+        if (!ha_playback_client_->SendFrame(packet.payload)) {
+            ESP_LOGE(TAG, "Failed to flush pending HA playback frame: ts=%lu",
+                static_cast<unsigned long>(packet.timestamp));
+            CancelHaPlaybackSession();
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void Application::HandleIncomingHaPlaybackAudio(
+    std::vector<uint8_t>&& payload,
+    int sample_rate,
+    int frame_duration_ms,
+    uint32_t timestamp) {
+    if (payload.empty()) {
+        return;
+    }
+
+    if (ha_playback_client_ != nullptr && ha_playback_active_) {
+        if (!ha_playback_client_->SendFrame(payload)) {
+            ESP_LOGE(TAG, "Failed to send HA playback frame: ts=%lu",
+                static_cast<unsigned long>(timestamp));
+            CancelHaPlaybackSession();
+            if (GetDeviceState() == kDeviceStateSpeaking) {
+                SetDeviceState(listening_mode_ == kListeningModeManualStop ? kDeviceStateIdle : kDeviceStateListening);
+            }
+        }
+        return;
+    }
+
+    if (ha_playback_pending_packets_.size() >= kMaxPendingHaPlaybackPackets) {
+        ESP_LOGE(TAG, "HA playback pending queue full, dropping current TTS");
+        ha_playback_pending_packets_.clear();
+        return;
+    }
+
+    ha_playback_pending_packets_.push_back(PendingHaPlaybackPacket{
+        .payload = std::move(payload),
+        .sample_rate = sample_rate,
+        .frame_duration_ms = frame_duration_ms,
+        .timestamp = timestamp,
+    });
+}
+
+void Application::FinishHaPlaybackSession() {
+    if (ha_playback_client_ == nullptr) {
+        ha_playback_pending_packets_.clear();
+        ha_playback_active_ = false;
+        RestoreLocalOutputVolume();
+        return;
+    }
+
+    while (!ha_playback_pending_packets_.empty()) {
+        auto packet = std::move(ha_playback_pending_packets_.front());
+        ha_playback_pending_packets_.pop_front();
+        if (!ha_playback_client_->SendFrame(packet.payload)) {
+            ESP_LOGE(TAG, "Failed to flush pending HA playback frame before finish: ts=%lu",
+                static_cast<unsigned long>(packet.timestamp));
+            CancelHaPlaybackSession();
+            return;
+        }
+    }
+
+    auto client = ha_playback_client_;
+    const std::string session_id = client->session_id();
+    if (!client->Finish()) {
+        CompleteHaPlaybackSession(session_id, HaPlaybackResult::kFailed, client->frame_count(), client->audio_ms());
+        return;
+    }
+
+    auto* context = new HaPlaybackFinishContext{
+        .app = this,
+        .client = client,
+        .session_id = session_id,
+        .timeout_ms = ha_playback_settings_.timeout_ms,
+    };
+
+    BaseType_t started = xTaskCreate([](void* arg) {
+        auto* context = static_cast<HaPlaybackFinishContext*>(arg);
+        Application* app = context->app;
+        auto client = context->client;
+        auto session_id = context->session_id;
+        auto timeout_ms = context->timeout_ms;
+        delete context;
+
+        auto result = client->WaitForResult(timeout_ms);
+        auto frame_count = client->frame_count();
+        auto audio_ms = client->audio_ms();
+        app->Schedule([app, session_id, result, frame_count, audio_ms]() {
+            app->CompleteHaPlaybackSession(session_id, result, frame_count, audio_ms);
+        });
+        vTaskDelete(NULL);
+    }, "ha_playback_wait", 4096, context, 2, nullptr);
+
+    if (started != pdPASS) {
+        delete context;
+        ESP_LOGE(TAG, "Failed to create HA playback wait task");
+        CompleteHaPlaybackSession(session_id, HaPlaybackResult::kFailed, client->frame_count(), client->audio_ms());
+    }
+}
+
+void Application::CompleteHaPlaybackSession(
+    const std::string& session_id,
+    HaPlaybackResult result,
+    uint32_t frame_count,
+    uint32_t audio_ms) {
+    if (ha_playback_client_ == nullptr || ha_playback_client_->session_id() != session_id) {
+        ESP_LOGD(TAG, "Ignoring stale HA playback completion: session=%s", session_id.c_str());
+        return;
+    }
+
+    ESP_LOGI(TAG, "HA playback complete: session=%s result=%d frames=%u audio_ms=%u",
+        session_id.c_str(),
+        static_cast<int>(result),
+        static_cast<unsigned>(frame_count),
+        static_cast<unsigned>(audio_ms));
+
+    if (result != HaPlaybackResult::kFinished) {
+        ESP_LOGE(TAG, "HA playback did not finish cleanly: result=%d", static_cast<int>(result));
+    }
+
+    ha_playback_client_.reset();
+    ha_playback_active_ = false;
+    ha_playback_pending_packets_.clear();
+    RestoreLocalOutputVolume();
+
+    audio_service_.ResetVoiceProcessor();
+    audio_service_.ClearUploadQueues();
+
+    if (GetDeviceState() == kDeviceStateSpeaking) {
+        if (listening_mode_ == kListeningModeManualStop) {
+            SetDeviceState(kDeviceStateIdle);
+        } else {
+            SetDeviceState(kDeviceStateListening);
+        }
+    }
+}
+
+void Application::CancelHaPlaybackSession() {
+    if (ha_playback_client_ != nullptr) {
+        ha_playback_client_->Cancel();
+        ha_playback_client_.reset();
+    }
+    ha_playback_pending_packets_.clear();
+    ha_playback_active_ = false;
+    RestoreLocalOutputVolume();
 }
 
 void Application::InitializeProtocol() {
@@ -558,6 +767,13 @@ void Application::InitializeProtocol() {
                 static_cast<unsigned>(packet->payload.size()),
                 packet->sample_rate,
                 packet->frame_duration);
+            if (IsHaPlaybackMode()) {
+                HandleIncomingHaPlaybackAudio(std::move(packet->payload),
+                    packet->sample_rate,
+                    packet->frame_duration,
+                    packet->timestamp);
+                return;
+            }
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
         } else {
             ESP_LOGW(TAG, "Incoming audio dropped: state=%s ts=%lu bytes=%u",
@@ -577,6 +793,7 @@ void Application::InitializeProtocol() {
     
     protocol_->OnAudioChannelClosed([this, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+        CancelHaPlaybackSession();
         EndWakeArbitrationSession();
         Schedule([this]() {
             auto display = Board::GetInstance().GetDisplay();
@@ -594,13 +811,33 @@ void Application::InitializeProtocol() {
                 Schedule([this]() {
                     aborted_ = false;
                     current_tts_text_.clear();
+                    ha_playback_settings_ = HaPlaybackSettings::Load();
                     tts_start_decode_packet_count_ = audio_service_.GetDecodePacketCount();
                     ESP_LOGI(TAG, "TTS start: decode_count=%lu",
                         static_cast<unsigned long>(tts_start_decode_packet_count_));
-                    audio_service_.ResetDecoderState();
-                    if (!Board::GetInstance().ShouldUploadAudioDuringSpeaking()) {
-                        audio_service_.BeginPlaybackBuffering(kDefaultPlaybackBufferFrames,
-                            kDefaultPlaybackBufferTimeoutMs);
+                    if (IsHaPlaybackMode()) {
+                        CancelHaPlaybackSession();
+                        int sample_rate = protocol_ ? protocol_->server_sample_rate() : 24000;
+                        int frame_duration_ms = protocol_ ? protocol_->server_frame_duration() : OPUS_FRAME_DURATION_MS;
+                        if (!ha_playback_pending_packets_.empty()) {
+                            sample_rate = ha_playback_pending_packets_.front().sample_rate;
+                            frame_duration_ms = ha_playback_pending_packets_.front().frame_duration_ms;
+                        }
+                        if (!StartHaPlaybackSession(sample_rate, frame_duration_ms)) {
+                            ha_playback_pending_packets_.clear();
+                            if (listening_mode_ == kListeningModeManualStop) {
+                                SetDeviceState(kDeviceStateIdle);
+                            } else {
+                                SetDeviceState(kDeviceStateListening);
+                            }
+                            return;
+                        }
+                    } else {
+                        audio_service_.ResetDecoderState();
+                        if (!Board::GetInstance().ShouldUploadAudioDuringSpeaking()) {
+                            audio_service_.BeginPlaybackBuffering(kDefaultPlaybackBufferFrames,
+                                kDefaultPlaybackBufferTimeoutMs);
+                        }
                     }
                     SetDeviceState(kDeviceStateSpeaking);
                 });
@@ -609,35 +846,41 @@ void Application::InitializeProtocol() {
                     ESP_LOGI(TAG, "TTS stop received: state=%s",
                         DeviceStateMachine::GetStateName(GetDeviceState()));
                     if (GetDeviceState() == kDeviceStateSpeaking) {
-                        bool wait_for_first_tts_audio = !Board::GetInstance().ShouldUploadAudioDuringSpeaking();
-                        auto tts_stop_summary = audio_service_.GetDecodePacketSummarySince(tts_start_decode_packet_count_);
-                        ESP_LOGI(TAG, "TTS drain begin: wait_first_audio=%d start_decode_count=%lu",
-                            wait_for_first_tts_audio ? 1 : 0,
-                            static_cast<unsigned long>(tts_start_decode_packet_count_));
-                        ESP_LOGI(TAG, "TTS audio before stop: text=\"%s\" packets=%lu audio_ms=%lu seq=%lu..%lu gaps=%lu plc=%lu ts=%lu..%lu",
-                            current_tts_text_.c_str(),
-                            static_cast<unsigned long>(tts_stop_summary.packets),
-                            static_cast<unsigned long>(tts_stop_summary.audio_ms),
-                            static_cast<unsigned long>(tts_stop_summary.first_sequence),
-                            static_cast<unsigned long>(tts_stop_summary.last_sequence),
-                            static_cast<unsigned long>(tts_stop_summary.sequence_gaps),
-                            static_cast<unsigned long>(tts_stop_summary.plc_packets),
-                            static_cast<unsigned long>(tts_stop_summary.first_timestamp),
-                            static_cast<unsigned long>(tts_stop_summary.last_timestamp));
-                        audio_service_.WaitForPlaybackQueueEmpty(
-                            wait_for_first_tts_audio ? tts_start_decode_packet_count_ : 0,
-                            wait_for_first_tts_audio ? 5000 : 0);
-                        auto tts_end_summary = audio_service_.GetDecodePacketSummarySince(tts_start_decode_packet_count_);
-                        ESP_LOGI(TAG, "TTS drain complete: text=\"%s\" packets=%lu audio_ms=%lu seq=%lu..%lu gaps=%lu plc=%lu ts=%lu..%lu",
-                            current_tts_text_.c_str(),
-                            static_cast<unsigned long>(tts_end_summary.packets),
-                            static_cast<unsigned long>(tts_end_summary.audio_ms),
-                            static_cast<unsigned long>(tts_end_summary.first_sequence),
-                            static_cast<unsigned long>(tts_end_summary.last_sequence),
-                            static_cast<unsigned long>(tts_end_summary.sequence_gaps),
-                            static_cast<unsigned long>(tts_end_summary.plc_packets),
-                            static_cast<unsigned long>(tts_end_summary.first_timestamp),
-                            static_cast<unsigned long>(tts_end_summary.last_timestamp));
+                        const bool ha_playback_tts = IsHaPlaybackMode();
+                        if (ha_playback_tts) {
+                            FinishHaPlaybackSession();
+                            return;
+                        } else {
+                            bool wait_for_first_tts_audio = !Board::GetInstance().ShouldUploadAudioDuringSpeaking();
+                            auto tts_stop_summary = audio_service_.GetDecodePacketSummarySince(tts_start_decode_packet_count_);
+                            ESP_LOGI(TAG, "TTS drain begin: wait_first_audio=%d start_decode_count=%lu",
+                                wait_for_first_tts_audio ? 1 : 0,
+                                static_cast<unsigned long>(tts_start_decode_packet_count_));
+                            ESP_LOGI(TAG, "TTS audio before stop: text=\"%s\" packets=%lu audio_ms=%lu seq=%lu..%lu gaps=%lu plc=%lu ts=%lu..%lu",
+                                current_tts_text_.c_str(),
+                                static_cast<unsigned long>(tts_stop_summary.packets),
+                                static_cast<unsigned long>(tts_stop_summary.audio_ms),
+                                static_cast<unsigned long>(tts_stop_summary.first_sequence),
+                                static_cast<unsigned long>(tts_stop_summary.last_sequence),
+                                static_cast<unsigned long>(tts_stop_summary.sequence_gaps),
+                                static_cast<unsigned long>(tts_stop_summary.plc_packets),
+                                static_cast<unsigned long>(tts_stop_summary.first_timestamp),
+                                static_cast<unsigned long>(tts_stop_summary.last_timestamp));
+                            audio_service_.WaitForPlaybackQueueEmpty(
+                                wait_for_first_tts_audio ? tts_start_decode_packet_count_ : 0,
+                                wait_for_first_tts_audio ? 5000 : 0);
+                            auto tts_end_summary = audio_service_.GetDecodePacketSummarySince(tts_start_decode_packet_count_);
+                            ESP_LOGI(TAG, "TTS drain complete: text=\"%s\" packets=%lu audio_ms=%lu seq=%lu..%lu gaps=%lu plc=%lu ts=%lu..%lu",
+                                current_tts_text_.c_str(),
+                                static_cast<unsigned long>(tts_end_summary.packets),
+                                static_cast<unsigned long>(tts_end_summary.audio_ms),
+                                static_cast<unsigned long>(tts_end_summary.first_sequence),
+                                static_cast<unsigned long>(tts_end_summary.last_sequence),
+                                static_cast<unsigned long>(tts_end_summary.sequence_gaps),
+                                static_cast<unsigned long>(tts_end_summary.plc_packets),
+                                static_cast<unsigned long>(tts_end_summary.first_timestamp),
+                                static_cast<unsigned long>(tts_end_summary.last_timestamp));
+                        }
                         if (!Board::GetInstance().ShouldUploadAudioDuringSpeaking()) {
                             audio_service_.ResetVoiceProcessor();
                             audio_service_.ClearUploadQueues();
@@ -1113,6 +1356,7 @@ void Application::Schedule(std::function<void()>&& callback) {
 void Application::AbortSpeaking(AbortReason reason) {
     ESP_LOGI(TAG, "Abort speaking");
     aborted_ = true;
+    CancelHaPlaybackSession();
     if (protocol_) {
         protocol_->SendAbortSpeaking(reason);
     }

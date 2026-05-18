@@ -74,6 +74,7 @@ private:
     bool sleep_mode_;
     bool auto_firmware_upgrade_;
     bool wake_arbitration_enabled_;
+    std::string wake_arbitration_gateway_url_;
     bool ha_mqtt_enabled_;
     std::string ha_mqtt_host_;
     int32_t ha_mqtt_port_;
@@ -81,6 +82,11 @@ private:
     std::string ha_mqtt_password_;
     std::string ha_mqtt_client_id_;
     std::string ha_mqtt_device_name_;
+    std::string ha_playback_tts_output_;
+    std::string ha_playback_media_player_entity_id_;
+    int32_t ha_playback_timeout_ms_;
+    bool ha_playback_restore_listening_;
+    int32_t ha_playback_local_volume_when_ha_output_;
 
     // Callbacks
     std::function<void()> on_exit_requested_;
@@ -93,6 +99,8 @@ private:
     static void IpEventHandler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
     void LoadHaMqttSettings();
     esp_err_t SaveHaMqttSettings(const cJSON* json);
+    void LoadHaPlaybackSettings();
+    esp_err_t SaveHaPlaybackSettings(const cJSON* json);
 #if !CONFIG_IDF_TARGET_ESP32P4
     static void SmartConfigEventHandler(void* arg, esp_event_base_t event_base,
                                       int32_t event_id, void* event_data);

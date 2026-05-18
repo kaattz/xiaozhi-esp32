@@ -54,3 +54,11 @@
 - Voice PE 实测用户抢话开头不丢后，`playback tail guard` 可从 300ms 继续试压到 200ms；这项仍是本机播放/AEC尾音保护，不是 MQTT/UDP 传输保护。
 - Voice PE LED 场景应参考官方语义：红色保留给错误/未就绪/静音/恢复出厂；配网用暖白；listening 用绿色慢速旋转，speaking 用蓝青色快速旋转。
 - Voice PE 静音 LED 应和官方场景对齐：麦克风 muted 用局部红点位 3/9，音量 silent 用局部红点位 6，错误告警才使用整圈红色闪烁。
+- 看到上游 xiaozhi-esp32 PR/issue 中 78 对主动唤醒协议的认可时，不能直接断言小智云不可控/不支持；必须区分“已上线”“PR 未合并”“官方正在设计/高概率支持”，并同时检查 WebSocket 与 MQTT/UDP 的通道限制。
+- Voice PE 官方 ESPHome `voice_kit`/`home-assistant-voice.yaml` 明确把 XU316 作为麦克风前端 DSP：stage enum 包含 AEC/IC/NS/AGC，默认 channel0=AGC、channel1=NS；评估小智适配时应优先对齐“ESP32 做协议/唤醒/状态机/网络，XU316 做前端音频处理”的边界，不能只按当前 ESP32 AFE 代码推断 AEC 主责。
+- Voice PE 006 的目标分工应写成 XU316 负责 AEC/NS/AGC/远场前处理，ESP32 负责协议/状态机/音频上传/TTS/HA/LED/按键；不能继续把 ESP32 AFE device AEC 或 `MR` playback reference 当作最终架构，否则职责和官方 Voice PE 设计冲突。
+- Voice PE 如果目标是把小智回复转到 HA 播放并保留小智 TTS 音色，不能把回复文本交给 HA `tts.speak` 重合成；必须保留服务器下发的原始 TTS 音频流，只改变播放输出路径。
+- Voice PE 增加 HA `media_player` 作为第三播放输出时，gateway 不能只生成临时 URL 和调用 HA 播放；必须追踪开始、播放中、结束、失败、超时，并回调设备 `ha_playback_started/finished/failed`，否则 ESP32 无法可靠恢复监听。
+- Voice PE 使用 HA 外部音箱播放时，XU316 拿不到该音箱的播放 reference，AEC/自由抢话不能按本机喇叭路径处理；第一版应暂停 ASR 上传，只保留唤醒词或按钮打断，播放结束后再恢复正常监听。
+- Voice PE 的 HA `media_player` 外放如果追求低延时，不能默认转码 MP3；应优先评估把小智 Opus 帧封装成 Ogg Opus 流直通，只有目标播放器不支持时才转码为 MP3/AAC 兼容流。
+- Voice PE HA 外放设计必须明确四个边界：上传 gateway 前 ESP32 已完成小智协议解密，gateway 收到裸 Opus；同设备并发 playback session 要有 supersede/cancel 策略；gateway 必须配置 HA/播放器可访问的 public stream URL；首字延迟超过 3 秒要拆分记录 Voice PE、gateway、HA 和播放器耗时。

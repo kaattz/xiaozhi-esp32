@@ -327,6 +327,11 @@
                     </label>
                     <input type="checkbox" id="wake_arbitration_enabled" name="wake_arbitration_enabled">
                 </p>
+                <p>
+                    <label for="wake_arbitration_gateway_url" data-lang="wake_arbitration_gateway_url">Wake Arbitration Gateway URL:</label>
+                    <input type="url" id="wake_arbitration_gateway_url" name="wake_arbitration_gateway_url">
+                    <small data-lang="wake_arbitration_gateway_url_hint">Leave empty to use the firmware default.</small>
+                </p>
 
                 <!-- Home Assistant MQTT -->
                 <fieldset style="border: 1px solid #ddd; border-radius: 6px; padding: 12px; margin: 20px 0;">
@@ -360,6 +365,37 @@
                     <p>
                         <label for="ha_mqtt_device_name" data-lang="ha_mqtt_device_name">HA Device Name:</label>
                         <input type="text" id="ha_mqtt_device_name" name="ha_mqtt_device_name">
+                    </p>
+                </fieldset>
+
+                <!-- HA Playback -->
+                <fieldset style="border: 1px solid #ddd; border-radius: 6px; padding: 12px; margin: 20px 0;">
+                    <legend data-lang="ha_playback_title">HA playback</legend>
+                    <p>
+                        <label for="tts_output" data-lang="tts_output">TTS output:</label>
+                        <select id="tts_output" name="tts_output">
+                            <option value="local" data-lang="tts_output_local">Local speaker / 3.5mm</option>
+                            <option value="ha_media_player" data-lang="tts_output_ha_media_player">Home Assistant media_player</option>
+                        </select>
+                    </p>
+                    <p>
+                        <label for="ha_media_player_entity_id" data-lang="ha_media_player_entity_id">HA media_player entity:</label>
+                        <input type="text" id="ha_media_player_entity_id" name="ha_media_player_entity_id" placeholder="media_player.beosound2">
+                    </p>
+                    <p>
+                        <label for="ha_playback_timeout_ms" data-lang="ha_playback_timeout_ms">HA playback timeout (ms):</label>
+                        <input type="number" id="ha_playback_timeout_ms" name="ha_playback_timeout_ms" min="10000" max="120000" value="60000">
+                    </p>
+                    <p style="display: flex; align-items: center; gap: 10px;">
+                        <label for="restore_listening_after_playback" style="margin: 0;">
+                            <span data-lang="restore_listening_after_playback">Restore listening after playback</span>
+                        </label>
+                        <input type="checkbox" id="restore_listening_after_playback" name="restore_listening_after_playback" checked>
+                    </p>
+                    <p>
+                        <label for="local_volume_when_ha_output" data-lang="local_volume_when_ha_output">Local volume during HA playback:</label>
+                        <input type="number" id="local_volume_when_ha_output" name="local_volume_when_ha_output" min="0" max="100" value="0">
+                        <small data-lang="ha_playback_hint">uses the configured gateway URL. Local volume only protects against prompt sounds or unexpected local output.</small>
                     </p>
                 </fieldset>
 
@@ -523,6 +559,8 @@
                 sleep_mode: 'Enable Sleep Mode',
                 auto_firmware_upgrade: 'Enable automatic firmware upgrade',
                 wake_arbitration_enabled: 'Enable Wake Arbitration',
+                wake_arbitration_gateway_url: 'Wake Arbitration Gateway URL:',
+                wake_arbitration_gateway_url_hint: 'Leave empty to use the firmware default.',
                 ha_mqtt_title: 'Home Assistant MQTT',
                 ha_mqtt_enabled: 'Enable HA MQTT bridge',
                 ha_mqtt_host: 'MQTT Host:',
@@ -531,6 +569,15 @@
                 ha_mqtt_password: 'MQTT Password:',
                 ha_mqtt_client_id: 'MQTT Client ID:',
                 ha_mqtt_device_name: 'HA Device Name:',
+                ha_playback_title: 'HA playback',
+                tts_output: 'TTS output:',
+                tts_output_local: 'Local speaker / 3.5mm',
+                tts_output_ha_media_player: 'Home Assistant media_player',
+                ha_media_player_entity_id: 'HA media_player entity:',
+                ha_playback_timeout_ms: 'HA playback timeout (ms):',
+                restore_listening_after_playback: 'Restore listening after playback',
+                local_volume_when_ha_output: 'Local volume during HA playback:',
+                ha_playback_hint: 'Uses the configured gateway URL. Local volume only protects against prompt sounds or unexpected local output.',
                 save: 'Save'
             },
             'es-ES': {
@@ -1055,6 +1102,8 @@
                 sleep_mode: '启用睡眠模式',
                 auto_firmware_upgrade: '启用自动固件升级',
                 wake_arbitration_enabled: '启用 Wake Arbitration',
+                wake_arbitration_gateway_url: 'Wake Arbitration Gateway URL:',
+                wake_arbitration_gateway_url_hint: '留空则使用固件默认配置。',
                 ha_mqtt_title: 'Home Assistant MQTT',
                 ha_mqtt_enabled: '启用 HA MQTT 桥接',
                 ha_mqtt_host: 'MQTT 主机:',
@@ -1083,6 +1132,8 @@
                 sleep_mode: '啟用睡眠模式',
                 auto_firmware_upgrade: '啟用自動韌體升級',
                 wake_arbitration_enabled: '啟用 Wake Arbitration',
+                wake_arbitration_gateway_url: 'Wake Arbitration Gateway URL:',
+                wake_arbitration_gateway_url_hint: '留空則使用韌體預設設定。',
                 ha_mqtt_title: 'Home Assistant MQTT',
                 ha_mqtt_enabled: '啟用 HA MQTT 橋接',
                 ha_mqtt_host: 'MQTT 主機:',
@@ -1425,13 +1476,21 @@
                 sleep_mode: document.getElementById('sleep_mode').checked,
                 auto_firmware_upgrade: document.getElementById('auto_firmware_upgrade').checked,
                 wake_arbitration_enabled: document.getElementById('wake_arbitration_enabled').checked,
+                wake_arbitration_gateway_url: document.getElementById('wake_arbitration_gateway_url').value.trim(),
                 ha_mqtt_enabled: document.getElementById('ha_mqtt_enabled').checked,
                 ha_mqtt_host: document.getElementById('ha_mqtt_host').value,
                 ha_mqtt_port: parseInt(document.getElementById('ha_mqtt_port').value),
                 ha_mqtt_username: document.getElementById('ha_mqtt_username').value,
                 ha_mqtt_password: document.getElementById('ha_mqtt_password').value,
                 ha_mqtt_client_id: document.getElementById('ha_mqtt_client_id').value,
-                ha_mqtt_device_name: document.getElementById('ha_mqtt_device_name').value
+                ha_mqtt_device_name: document.getElementById('ha_mqtt_device_name').value,
+                ha_playback: {
+                    tts_output: document.getElementById('tts_output').value,
+                    media_player_entity_id: document.getElementById('ha_media_player_entity_id').value.trim(),
+                    timeout_ms: parseInt(document.getElementById('ha_playback_timeout_ms').value),
+                    restore_listening: document.getElementById('restore_listening_after_playback').checked,
+                    local_volume_when_ha_output: parseInt(document.getElementById('local_volume_when_ha_output').value)
+                }
             };
 
             try {
@@ -1517,6 +1576,12 @@
                 if (data.wake_arbitration_enabled !== undefined) {
                     document.getElementById('wake_arbitration_enabled').checked = data.wake_arbitration_enabled;
                 }
+                if (data.wake_arbitration_gateway_url !== undefined) {
+                    document.getElementById('wake_arbitration_gateway_url').value = data.wake_arbitration_gateway_url;
+                }
+                if (data.wake_arbitration_gateway_url_default !== undefined) {
+                    document.getElementById('wake_arbitration_gateway_url').placeholder = data.wake_arbitration_gateway_url_default;
+                }
                 if (data.ha_mqtt_enabled !== undefined) {
                     document.getElementById('ha_mqtt_enabled').checked = data.ha_mqtt_enabled;
                 }
@@ -1537,6 +1602,23 @@
                 }
                 if (data.ha_mqtt_device_name !== undefined) {
                     document.getElementById('ha_mqtt_device_name').value = data.ha_mqtt_device_name;
+                }
+                if (data.ha_playback !== undefined) {
+                    if (data.ha_playback.tts_output !== undefined) {
+                        document.getElementById('tts_output').value = data.ha_playback.tts_output;
+                    }
+                    if (data.ha_playback.media_player_entity_id !== undefined) {
+                        document.getElementById('ha_media_player_entity_id').value = data.ha_playback.media_player_entity_id;
+                    }
+                    if (data.ha_playback.timeout_ms !== undefined) {
+                        document.getElementById('ha_playback_timeout_ms').value = data.ha_playback.timeout_ms;
+                    }
+                    if (data.ha_playback.restore_listening !== undefined) {
+                        document.getElementById('restore_listening_after_playback').checked = data.ha_playback.restore_listening;
+                    }
+                    if (data.ha_playback.local_volume_when_ha_output !== undefined) {
+                        document.getElementById('local_volume_when_ha_output').value = data.ha_playback.local_volume_when_ha_output;
+                    }
                 }
             } catch (error) {
                 console.error('Error loading advanced config:', error);
