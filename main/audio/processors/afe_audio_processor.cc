@@ -1,4 +1,5 @@
 #include "afe_audio_processor.h"
+#include "board.h"
 #include <esp_log.h>
 
 #define PROCESSOR_RUNNING 0x01
@@ -37,6 +38,8 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
 
     char* ns_model_name = esp_srmodel_filter(models, ESP_NSNET_PREFIX, NULL);
     char* vad_model_name = esp_srmodel_filter(models, ESP_VADN_PREFIX, NULL);
+    const bool hardware_audio_frontend = Board::GetInstance().HasHardwareAudioFrontend();
+    ESP_LOGI(TAG, "Hardware audio frontend: %s", hardware_audio_frontend ? "true" : "false");
     
     afe_config_t* afe_config = afe_config_init(input_format.c_str(), NULL, AFE_TYPE_VC, AFE_MODE_HIGH_PERF);
     afe_config->aec_mode = AEC_MODE_VOIP_HIGH_PERF;
@@ -46,7 +49,7 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
         afe_config->vad_model_name = vad_model_name;
     }
 
-    if (ns_model_name != nullptr) {
+    if (!hardware_audio_frontend && ns_model_name != nullptr) {
         afe_config->ns_init = true;
         afe_config->ns_model_name = ns_model_name;
         afe_config->afe_ns_mode = AFE_NS_MODE_NET;
@@ -58,8 +61,13 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
 
 #ifdef CONFIG_USE_DEVICE_AEC
-    afe_config->aec_init = true;
-    afe_config->vad_init = false;
+    if (hardware_audio_frontend) {
+        afe_config->aec_init = false;
+        afe_config->vad_init = true;
+    } else {
+        afe_config->aec_init = true;
+        afe_config->vad_init = false;
+    }
 #else
     afe_config->aec_init = false;
     afe_config->vad_init = true;

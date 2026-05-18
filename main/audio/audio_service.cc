@@ -141,7 +141,8 @@ void AudioService::Initialize(AudioCodec* codec) {
     audio_processor_->OnOutput([this](std::vector<int16_t>&& data) {
         debug_statistics_.processor_output_count++;
         debug_statistics_.processor_output_rms = CalculateRms(data);
-        PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data), !codec_->input_reference());
+        bool wait_for_encode_queue = !codec_->input_reference() && Board::GetInstance().ShouldUploadAudioDuringSpeaking();
+        PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data), wait_for_encode_queue);
     });
 
     audio_processor_->OnVadStateChange([this](bool speaking) {
@@ -978,7 +979,10 @@ void AudioService::WaitForPlaybackQueueEmpty(uint32_t min_decode_packet_count, i
 }
 
 bool AudioService::IsPlaybackTailGuardActiveLocked() const {
-    if (codec_ == nullptr || !codec_->input_reference()) {
+    if (codec_ == nullptr) {
+        return false;
+    }
+    if (!codec_->input_reference() && Board::GetInstance().ShouldUploadAudioDuringSpeaking()) {
         return false;
     }
 

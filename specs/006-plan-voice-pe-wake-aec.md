@@ -1,4 +1,4 @@
-# 006 实施计划：Voice PE 本地唤醒词与 AEC
+# 006 实施计划：Voice PE 本地唤醒词与 XU316 前端 DSP
 
 ## 执行规则
 
@@ -8,10 +8,11 @@
 | 不提交/推送/刷机 | 提交、推送、刷机前必须单独确认。 |
 | 不改协议 | 不改小智 WebSocket/MQTT 协议，不新增 Voice PE 专用协议。 |
 | 不做非目标 | 不做 Grove、电源扩展、XMOS DFU、耳机路由、自定义唤醒词。 |
-| 不假装 AEC | 没有真实 reference channel，不允许启用或宣称 AEC。 |
-| 先唤醒后 AEC | 先证明“你好小智”本地唤醒，再接入 AEC reference。 |
-| 硬件失败即暂停 | 唤醒模型缺失、reference 无效或 AFE 输入格式错误时，暂停并更新 Spec。 |
-| 构建命令 | 006 的有效构建必须让 `config.json` 写入 `sdkconfig`。优先用 `python scripts/release.py home-assistant-voice-pe`；裸 `idf.py build` 只允许在确认 `sdkconfig` 已重新生成且包含 006 配置后使用。手工等价验证时必须按 `release.py` 顺序先写入 `CONFIG_BOARD_TYPE_HOME_ASSISTANT_VOICE_PE=y`，再写入 `sdkconfig_append`，否则 `CONFIG_USE_DEVICE_AEC=y` 会因依赖不满足被 Kconfig 改回关闭。 |
+| 不冒充 XU316 AEC | 不启用 ESP32 device AEC 或 server AEC 来冒充 XU316 前端 DSP。 |
+| 先边界后效果 | 先证明 XU316 初始化和 channel stage 正确，再验收播放参考路径和回声效果。 |
+| 对齐官方 channel | 唤醒必须走 XMOS channel 1 / NS；语音处理和上传必须走 XMOS channel 0 / AGC。 |
+| 硬件失败即暂停 | 唤醒模型缺失、XU316 初始化失败、stage 写入失败、播放参考路径无法证明时，暂停并更新 Spec。 |
+| 构建命令 | 006 的有效构建必须让 `config.json` 写入 `sdkconfig`。优先用 `python scripts/release.py home-assistant-voice-pe`；裸 `idf.py build` 只允许在确认 `sdkconfig` 已重新生成且包含 006 配置后使用。Voice PE 最终配置必须显式排除 `CONFIG_USE_DEVICE_AEC` 和 `CONFIG_USE_SERVER_AEC`。 |
 
 ## Task 0：实施前检查
 
@@ -23,6 +24,7 @@
 - `main/boards/home-assistant-voice-pe/config.json`
 - `main/boards/home-assistant-voice-pe/config.h`
 - `main/boards/home-assistant-voice-pe/voice_pe_audio_codec.cc`
+- `main/boards/home-assistant-voice-pe/voice_pe_xmos.*`
 - `main/audio/audio_service.cc`
 - `main/audio/wake_words/afe_wake_word.cc`
 - `main/audio/processors/afe_audio_processor.cc`
@@ -32,23 +34,26 @@
 
 - 读取 006 req/spec/design。
 - 确认“你好小智”模型存在。
-- 确认 Voice PE 当前 `CONFIG_WAKE_WORD_DISABLED=y`、`input_reference_=false`、`input_channels_=1`。
+- 确认 Voice PE 当前已启用本地唤醒。
+- 确认当前代码仍有 ESP32 AFE AEC 路径：`CONFIG_USE_DEVICE_AEC`、`AUDIO_INPUT_REFERENCE`、`input_reference_`、`input_channels_=2`、reference FIFO 或等价 `MR` 输入。
+- 确认目标实现必须把 Voice PE 主上传链路改回 XU316 处理后的单路 mic，不继续把 playback reference 喂给 ESP32 AFE 做 AEC。
+- 确认 `duplex_` 需要和 `input_reference_` 解耦：保留同时播放/采集能力，但 `input_reference_=false`、`input_channels_=1` 或等价实现。
+- 确认官方 Voice PE 通道分工：`micro_wake_word` 使用 channel 1 / NS，`voice_assistant` 使用 channel 0 / AGC。
+- 确认 XU316 pipeline stage 目标：channel 0 = AGC，channel 1 = NS。
+- 确认本 feature 只切换用途对应的 slot，不同时修改输入增益、32-bit 到 int16 转换和 RMS 口径。若 AGC 通道噪声偏高，先记录 raw mic RMS 和 AFE output RMS，再另开调参。
 - 确认 005 mute 仍是本地唤醒的硬门禁。
-- 确认 AEC 必须使用 `M,R` 输入，不接受单 mic 通道。
-- 确认 Voice PE 通道分工和实测差异：官方 Voice PE `voice_assistant` 使用 channel 0 / AGC，但本项目 004 阶段已经存在主观背景噪声，006 不能只靠切换到 channel 1 / NS 宣称解决。必须先记录 raw mic RMS 和 AFE output RMS。
 - 确认 `Board` 当前没有通用 mute 查询接口，需要新增默认 false 的 `IsMicrophoneMuted()`。
-- 确认启动日志可记录 free PSRAM；WakeNet + AFE + reference buffer 后 PSRAM 不足时暂停。
-- 确认 `AudioService` 现有重采样器使用 `esp_ae_rate_cvt_open/process`，006 reference 重采样复用同一组件。
+- 确认启动日志可记录 free PSRAM；WakeNet + AFE 后 PSRAM 不足时暂停。
 
 <verify>
 
 - `git status --short`
-- `rg -n "NIHAOXIAOZHI|CONFIG_WAKE_WORD_DISABLED|CONFIG_USE_AFE_WAKE_WORD|CONFIG_USE_DEVICE_AEC|input_reference_|input_channels_" main managed_components specs`
+- `rg -n "NIHAOXIAOZHI|CONFIG_WAKE_WORD_DISABLED|CONFIG_USE_AFE_WAKE_WORD|CONFIG_USE_DEVICE_AEC|CONFIG_USE_SERVER_AEC|AUDIO_INPUT_REFERENCE|input_reference_|input_channels_|kWakeWordMicSlot|kVoiceMicSlot" main managed_components specs`
 - 硬件启动日志：记录 free PSRAM。
 
 <done>
 
-- 明确施工只做本地唤醒词和 AEC。
+- 明确施工只做本地唤醒词、官方 channel 分工和 XU316 前端 DSP 边界。
 
 ## Task 1：启用“你好小智”预置唤醒词
 
@@ -108,37 +113,39 @@
 
 - 本地唤醒词可用，且受 mute 保护。
 
-## Task 3：实现 playback reference 缓冲
+## Task 3：对齐 XU316 初始化与 pipeline stage
 
 <files>
 
-- Modify: `main/boards/home-assistant-voice-pe/voice_pe_audio_codec.h`
-- Modify: `main/boards/home-assistant-voice-pe/voice_pe_audio_codec.cc`
+- Modify if needed: `main/boards/home-assistant-voice-pe/voice_pe_xmos.h`
+- Modify if needed: `main/boards/home-assistant-voice-pe/voice_pe_xmos.cc`
+- Modify if needed: `main/boards/home-assistant-voice-pe/voice_pe_audio_codec.cc`
 - Modify: `tests/test_home_assistant_voice_pe_static.py`
 
 <action>
 
-- 在 `VoicePeAudioCodec` 中增加 48 kHz 到 16 kHz 的 ESP audio resampler，用于 reference。
-- `Write()` 将实际播放 PCM 写入 reference ring buffer。
-- reference 存储为 16 kHz int16 mono。
-- reference ring buffer 初始容量为 3200 samples，即 200ms @ 16 kHz；不额外增加播放路径延迟，按官方小智软件 reference 方式在播放写入后立即进入 FIFO；溢出时丢最旧数据并限频记录。
-- Task 3 只实现 reference buffer、重采样和 RMS 诊断；不得修改 `input_reference_`、`input_channels_`，不得让 `Read()` 输出双通道。
-- reference buffer 只代表已送往扬声器的数据；不从服务器包或固定波形伪造。
-- 保持 mic 的 `SaturateMicSample()` 和增益不变；wake word、voice processing 和 audio testing 先使用 channel 1 / NS。不要同时降低输入增益和切通道；若安静时 `raw_rms` 也高，再单独评估输入增益；若 `raw_rms` 低但 `out_rms` 高，再回查 AFE/AEC 配置。
-- 增加 reference RMS 诊断日志。
+- 确认 XU316 初始化路径能读取版本或等价设备状态。
+- 初始化后写入官方 pipeline stage：
+  - channel 0 = AGC
+  - channel 1 = NS
+- 启动日志打印 XU316 初始化结果、版本、stage 写入结果。
+- 保留 ESP32 输出 I2S 路径，让 TTS/提示音 PCM 继续走官方播放路径。
+- 不实现或保留 ESP32 playback reference FIFO 作为 AEC 依据；若代码里已有 reference FIFO，只能删除或降为非 AEC 诊断，不能作为完成标准。
+- 若无法证明 XU316 能使用当前播放路径作为回声参考，暂停并更新 Spec，不继续宣称 XU316 AEC 完成。
 
 <verify>
 
 - `python -m pytest tests/test_home_assistant_voice_pe_static.py -q`
 - `python scripts/release.py home-assistant-voice-pe`
-- 硬件：播放测试音时 reference RMS 非零。
-- 硬件：无播放时 reference RMS 接近零。
+- 静态测试：存在 `WritePipelineStages()` 或等价写 stage 逻辑，且默认 channel 0 = AGC、channel 1 = NS。
+- 硬件日志：XU316 初始化成功，stage 写入成功。
+- 硬件：TTS/提示音播放正常。
 
 <done>
 
-- AEC 所需 reference channel 有真实数据来源。
+- XU316 前端 DSP 初始化边界明确，ESP32 不再用 reference FIFO 充当 AEC 实现。
 
-## Task 4：切换 Voice PE AFE 输入为 `M,R`
+## Task 4：对齐官方 channel 分工并取消 ESP32 AFE AEC 输入
 
 <files>
 
@@ -150,53 +157,71 @@
 
 <action>
 
-- 设置 `AUDIO_INPUT_REFERENCE true`。
-- `VoicePeAudioCodec` 设置：
-  - `input_reference_=true`
-  - `input_channels_=2`
-- `Read()` 在本任务才切换为输出 interleaved `mic,reference`，避免 Task 3/4 中间状态让 AFE 按单通道误读双通道数据。
-- 对齐策略：每次 `Read()` 读到 N 帧 mic 后，从 reference FIFO 中直接取 N 帧；不足补 0 并计数，超量保留最近 200ms；超过 300ms 没有新播放 PCM 时清空旧 reference。
-- 在 AFE 初始化日志里打印 input format，必须能看到 `MR`。
-- 确认 wake word 和 voice processor 都按双通道 feed size 处理。
+- 对齐官方 ESPHome channel 用法：
+  - `kWakeWordMicSlot = 1`
+  - `kVoiceMicSlot = 0`
+  - `AudioInputPurpose::kWakeWord` 选择 slot 1 / NS
+  - `AudioInputPurpose::kVoiceProcessing` 选择 slot 0 / AGC
+  - `AudioInputPurpose::kAudioTesting` 默认选择 slot 0 / AGC，用来测试实际上传给小智的同一路音频
+- 设置或等价实现：
+  - `duplex_=true`
+  - `input_reference_=false`
+  - `input_channels_=1`
+- `Read()` 输出 XU316 处理后的单路 mic，不输出 interleaved `mic,reference`。
+- 若 `AUDIO_INPUT_REFERENCE` 仍存在，必须改为 false 或拆分出新宏，不能再同时控制 full-duplex 和 ESP32 AFE reference。
+- 不改 XU316 pipeline stage；继续保持 channel 0 = AGC、channel 1 = NS。
+- 不改 `SaturateMicSample()`、输入增益和 RMS 口径。
+- mic probe 或等价调试日志必须能看出 wake 阶段 `slot=1`、voice processing 阶段 `slot=0`。
+- 记录切换前后的同口径 RMS：NS slot 1 wake raw/out RMS、AGC slot 0 voice raw/out RMS。若 AGC 通道噪声偏高，只记录并暂停调参，不在本任务内改输入增益。
 
 <verify>
 
 - `python -m pytest tests/test_home_assistant_voice_pe_static.py -q`
 - `python scripts/release.py home-assistant-voice-pe`
-- 硬件日志：AFE input format 为 `MR` 或等价明确输出。
+- 静态测试：`kWakeWordMicSlot = 1`、`kVoiceMicSlot = 0`，且 `SetInputPurpose()` 分别选择两个 slot。
+- 静态测试：Voice PE 主上传路径不输出 `dest[i * input_channels_ + 1]` 或等价 reference channel。
+- 静态测试：`input_reference_=false`、`input_channels_=1`、`duplex_=true` 或等价实现。
+- 硬件日志：wake 阶段读取 slot 1；唤醒后 voice processing 读取 slot 0。
+- 硬件日志：记录 channel 切换前后的 raw mic RMS 和 AFE output RMS。
 - 硬件：本地唤醒仍成功。
 
 <done>
 
-- AFE 收到 mic + reference，不再是单 mic 假 AEC。
+- ESP32 接收 XU316 处理后的 channel 1/0 音频，不再给 ESP32 AFE 喂 `M,R` 做 AEC。
 
-## Task 5：启用设备端 AEC
+## Task 5：禁用 ESP32 AEC/NS/AGC 并保护 TTS 播放
 
 <files>
 
 - Modify: `main/boards/home-assistant-voice-pe/config.json`
+- Modify if needed: `main/audio/processors/afe_audio_processor.cc`
+- Modify if needed: `main/audio/audio_service.cc`
+- Modify if needed: `main/application.cc`
 - Modify: `tests/test_home_assistant_voice_pe_static.py`
 
 <action>
 
-- 增加 `CONFIG_USE_DEVICE_AEC=y`。
+- 移除 `CONFIG_USE_DEVICE_AEC=y`。
 - 确认没有启用 `CONFIG_USE_SERVER_AEC`。
-- 确认 `AfeAudioProcessor` 初始化时 AEC enabled，且输入格式为 `MR`。
-- `WaitForPlaybackQueueEmpty()` 必须等待当前 active playback chunk 结束，并循环复查迟到的 decode/playback 包；在 `input_reference()` 设备上保留 700ms 播放尾音保护窗，防止 speaking 刚切 listening 就上传本机 TTS 尾音。
-- listening 状态也必须接收服务器迟到的 TTS 音频包；只要本地仍有 decode/playback queue、active playback，或 `input_reference()` 设备仍处于 700ms 播放尾音保护窗内，就暂停麦克风上传。
+- 确认 Voice PE 主链路不在 XU316 后叠加第二套 ESP32 AEC/NS/AGC。
+- 如果 wake word 仍必须经过 ESP-SR AFE，输入只能来自 XU316 NS channel 1，不得要求 ESP32 `MR` 作为 AEC 前提。
+- `WaitForPlaybackQueueEmpty()` 必须等待当前 active playback chunk 结束，并循环复查迟到的 decode/playback 包。
+- 从 `speaking` 回到 `listening` 前，保留 `kPlaybackTailGuardMs = 200ms` 播放尾音保护窗，防止刚播完的本机尾音被上传。
+- listening 状态也必须接收服务器迟到的 TTS 音频包；只要本地仍有 decode/playback queue、active playback，或 playback tail guard 仍激活，就暂停麦克风上传。
 - 进入 speaking 状态时不能清空 decode/playback queue；服务器 TTS 音频包可能先于 `tts start` JSON 到达，清队列会造成“只播一个字”或句子截断。
-- `EnableVoiceProcessing(true)` 不能隐式清空 decode/playback queue；清播放队列必须由明确的新会话入口或停止路径显式完成，否则会清掉 listening 状态刚接收的迟到 TTS 音频。
-- TTS stop 处理必须先 drain playback，再切 listening/idle；不能先切 listening 后等待，否则迟到的 TTS 音频会被 `OnIncomingAudio` 按 listening 状态丢弃。
-- Voice PE 当前默认 `auto` 收音模式，speaking 阶段不运行服务器上传链路；TTS 播放收尾后、切回 listening 前，必须重置本地 voice processor/AFe 缓冲，并清理上行 encode queue 和 send queue 中的残留语音帧。当前阶段只保留本地唤醒词或中心按钮打断。自由边播边听必须等 reference 延迟实测或硬件回采证明可靠后再启用。
-- 遵循官方小智 realtime 连续流语义：只有新开收音窗口、播放提示音入口或本地 voice processor 未运行时才发送 `listen/start` 并启动 voice processor；从 TTS stop 回到 `listening` 时如果 processor 已在运行，不能重复重置流、清空上行队列或重新发送 `listen/start`，否则会打断多段助手回复和工具结果。
-- 如果 reference RMS 或输入格式不满足条件，撤回本任务并更新 Spec。
-- 记录纯播放无人说话 30 秒内是否产生用户 ASR 文本；产生则 AEC 验收失败。
+- `EnableVoiceProcessing(true)` 不能隐式清空 decode/playback queue；清播放队列必须由明确的新会话入口或停止路径显式完成。
+- TTS stop 处理必须先 drain playback，再切 listening/idle；不能先切 listening 后等待。
+- Voice PE 当前默认 `auto` 收音模式，speaking 阶段不运行服务器上传链路；TTS 播放收尾后、切回 listening 前，必须重置本地 voice processor/AFe 缓冲，并清理上行 encode queue 和 send queue 中的残留语音帧。
+- 遵循官方小智 realtime 连续流语义：只有新开收音窗口、播放提示音入口或本地 voice processor 未运行时才发送 `listen/start` 并启动 voice processor；从 TTS stop 回到 `listening` 时如果 processor 已在运行，不能重复重置流、清空上行队列或重新发送 `listen/start`。
+- 记录纯播放无人说话 30 秒内是否产生用户 ASR 文本；产生则验收失败。
 - 播放期间限频记录 output peak/RMS/volume；用户报告播放中电流声时，先用 peak 判断是否数字削波。
 
 <verify>
 
 - `python -m pytest tests/test_home_assistant_voice_pe_static.py -q`
 - `python scripts/release.py home-assistant-voice-pe`
+- 静态测试：Voice PE config 不包含 `CONFIG_USE_DEVICE_AEC`、`CONFIG_USE_SERVER_AEC`。
+- 静态测试：TTS stop 先 drain playback，再切状态。
 - 硬件：播放期间无人说话时，小智不应把自身播报识别成用户语音。
 - 硬件：播放期间说“你好小智”或按中心按钮，仍可进入新的交互。
 - 硬件：纯播放无人说话 30 秒内，小智 Server 不返回用户 ASR 文本。
@@ -204,7 +229,7 @@
 
 <done>
 
-- 设备端 AEC 可用，且有日志证明 reference 真实存在。
+- ESP32 前端 DSP 叠加处理被移除，TTS 播放可靠性约束仍保留。
 
 ## Task 6：硬件回归
 
@@ -216,12 +241,15 @@
 
 - 刷机前单独确认。
 - 依次验收：
+  - XU316 初始化成功。
+  - XU316 pipeline stage：channel 0 = AGC，channel 1 = NS。
   - 本地“你好小智”唤醒。
   - mute 打开阻止本地唤醒。
   - 按钮问答。
-  - AEC reference RMS。
-  - 播放期间说话的 AEC 主观效果。
+  - wake 阶段 slot 1 / NS。
+  - voice upload 阶段 slot 0 / AGC。
   - 纯播放无人说话 30 秒 ASR 空结果。
+  - 播放期间说话的主观回声效果。
   - 30 分钟误唤醒观察。
   - 005 LED/mute/旋钮。
 
@@ -229,16 +257,18 @@
 
 - 串口日志记录：
   - WakeNet 模型。
+  - XU316 初始化和 stage 写入。
   - wake word detected。
-  - AFE input format。
-  - reference RMS。
+  - wake slot = 1。
+  - voice slot = 0。
+  - Voice PE 未启用 ESP32 AEC。
   - free PSRAM。
   - 误唤醒次数。
   - 小智连接和 TTS 播放。
 
 <done>
 
-- AC-1..AC-8 全部通过，误唤醒未超过每小时 3 次。
+- AC-1..AC-10 全部通过，误唤醒未超过每小时 3 次。
 
 ## Task 7：完成前漂移检查
 
@@ -253,19 +283,21 @@
 
 <action>
 
-- 逐条核对 REQ-1..REQ-15。
-- 逐条核对 REQ-16。
+- 逐条核对 REQ-1..REQ-19。
 - 确认没有加入自定义唤醒词。
 - 确认没有做 Grove、电源扩展、XMOS DFU、耳机路由。
 - 确认没有改小智协议。
-- 确认没有改变 mic 转换、输入增益和 RMS 口径；确认 Voice PE 唤醒/STT slot 分工仍与官方一致。
-- 确认 AEC 不是单通道假实现。
+- 确认没有改变 mic 转换、输入增益和 RMS 口径。
+- 确认 Voice PE slot 分工与官方一致：wake word = channel 1 / NS，voice processing/upload = channel 0 / AGC。
+- 确认 Voice PE 主链路没有 ESP32 device AEC、server AEC 或二次 NS/AGC。
+- 确认 full-duplex 没有被 `input_reference_` 误关。
+- Review 查 Bug，然后按第一性原理分析是否有更简单、更稳健的实现。
 
 <verify>
 
 - `python -m pytest tests/test_home_assistant_voice_pe_static.py -q`
 - `python scripts/release.py home-assistant-voice-pe`
-- `rg -n "CONFIG_USE_CUSTOM_WAKE_WORD|CONFIG_USE_SERVER_AEC|CONFIG_WAKE_WORD_DISABLED|CONFIG_USE_DEVICE_AEC|NIHAOXIAOZHI|input_reference_|input_channels_|IsMicrophoneMuted|esp_ae_rate_cvt" main/boards/home-assistant-voice-pe main/boards/common main/audio tests specs/006-req-voice-pe-wake-aec.md specs/006-spec-voice-pe-wake-aec.md specs/006-plan-voice-pe-wake-aec.md`
+- `rg -n "CONFIG_USE_CUSTOM_WAKE_WORD|CONFIG_WAKE_WORD_DISABLED|CONFIG_USE_DEVICE_AEC|CONFIG_USE_SERVER_AEC|NIHAOXIAOZHI|AUDIO_INPUT_REFERENCE|input_reference_|input_channels_|duplex_|IsMicrophoneMuted|kWakeWordMicSlot|kVoiceMicSlot|AppendReferenceSamples|PopReferenceSamples|reference_ring_buffer_" main/boards/home-assistant-voice-pe main/boards/common main/audio tests specs/006-req-voice-pe-wake-aec.md specs/006-spec-voice-pe-wake-aec.md specs/006-plan-voice-pe-wake-aec.md`
 
 <done>
 
@@ -275,8 +307,9 @@
 
 | Review | 检查 |
 |---|---|
-| 产品 review | 006 是否只做“你好小智”本地唤醒和 AEC |
+| 产品 review | 006 是否只做“你好小智”本地唤醒、官方 channel 分工和 XU316 前端 DSP 边界 |
 | 工程 review | 是否复用 ESP-SR/AfeWakeWord/Application 现有流程 |
-| 音频 review | reference 是否真实、16 kHz、interleaved `M,R` |
-| 硬件 review | 唤醒、mute、AEC reference 和播放期间说话是否通过实机 |
+| 音频 review | XU316 是否负责 AEC/NS/AGC/远场前处理，ESP32 是否只拿处理后的 channel 1/0 音频 |
+| 播放 review | TTS 播放是否完整，stop/drain/tail guard/迟到包是否受保护 |
+| 硬件 review | 唤醒、mute、XU316 stage、channel 切换、纯播放 ASR 空结果是否通过实机 |
 | 验证 review | 静态测试、构建、硬件 AC 是否都有结果 |

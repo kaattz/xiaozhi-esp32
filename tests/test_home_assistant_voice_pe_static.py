@@ -58,7 +58,7 @@ def test_voice_pe_audio_codec_declares_real_sample_rates_and_pcm_conversion():
     assert "VOICE_PE_MIC_BCLK_GPIO" in source
     assert "VOICE_PE_SPK_BCLK_GPIO" in source
     assert "kWakeWordMicSlot = 1" in source
-    assert "kVoiceMicSlot = 1" in source
+    assert "kVoiceMicSlot = 0" in source
     assert "kMicSampleShift = 8" in source
     assert "kMicGainNumerator = 3" in source
     assert "kMicGainDenominator = 2" in source
@@ -126,12 +126,12 @@ def test_voice_pe_interaction_gpio_constants_and_wake_aec_config_are_declared():
         assert value in config
 
     assert "#define VOICE_PE_VOLUME_STEP            5" in config
-    assert "#define AUDIO_INPUT_REFERENCE    true" in config
+    assert "#define AUDIO_INPUT_REFERENCE    false" in config
     assert "CONFIG_WAKE_WORD_DISABLED=y" not in config_json
     assert "CONFIG_USE_AFE_WAKE_WORD=y" in config_json
     assert "CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS=y" in config_json
     assert "CONFIG_SEND_WAKE_WORD_DATA=y" in config_json
-    assert "CONFIG_USE_DEVICE_AEC=y" in config_json
+    assert "CONFIG_USE_DEVICE_AEC" not in config_json
     assert "CONFIG_USE_CUSTOM_WAKE_WORD" not in config_json
     assert "CONFIG_USE_SERVER_AEC" not in config_json
     assert "BOARD_TYPE_HOME_ASSISTANT_VOICE_PE" in kconfig
@@ -300,41 +300,39 @@ def test_voice_pe_local_wake_uses_preset_nihao_xiaozhi_without_custom_word():
     assert "ESP_LOGI(TAG, \"AFE wake word input format: %s\", input_format.c_str())" in afe_wake
 
 
-def test_voice_pe_reference_channel_is_real_resampled_playback_pcm():
+def test_voice_pe_uses_xu316_frontend_without_esp32_reference_aec():
     header = read("main/boards/home-assistant-voice-pe/voice_pe_audio_codec.h")
     source = read("main/boards/home-assistant-voice-pe/voice_pe_audio_codec.cc")
+    board_header = read("main/boards/common/board.h")
+    board = read("main/boards/home-assistant-voice-pe/home_assistant_voice_pe_board.cc")
     processor = read("main/audio/processors/afe_audio_processor.cc")
 
-    assert '#include "esp_ae_rate_cvt.h"' in header
-    assert "kReferenceRingCapacitySamples = 3200" in source
-    assert "kReferencePlaybackDelaySamples = 0" in source
-    assert "esp_ae_rate_cvt_open" in source
-    assert "esp_ae_rate_cvt_process" in source
-    assert "reference_ring_buffer_" in header
-    assert "AppendReferenceSamples" in header
-    assert "PopReferenceSamples" in header
-    assert "LogReferenceProbe" in header
-    assert "input_reference_ = AUDIO_INPUT_REFERENCE" in source
-    assert "input_channels_ = AUDIO_INPUT_REFERENCE ? 2 : 1" in source
-    assert "frames_requested = input_reference_ ? samples / input_channels_ : samples" in source
-    assert "dest[i * input_channels_]" in source
-    assert "dest[i * input_channels_ + 1]" in source
-    assert "AppendReferenceSamples(data, samples_written)" in source
-    assert source.index("i2s_channel_write") < source.index("AppendReferenceSamples(data, samples_written)")
-    assert "reference probe:" in source
-    assert "reference underrun" in source
-    assert "reference overflow" in source
-    assert "last_reference_append_us_" in header
-    assert "kReferenceUnderrunLogWindowUs" in source
-    assert "kReferenceStaleAfterUs" in source
-    assert "last_reference_append_us_ = esp_timer_get_time()" in source
-    assert "now_us - last_reference_append_us_ > kReferenceUnderrunLogWindowUs" in source
-    assert "reference_ring_buffer_.clear()" in source
-    assert "available = reference_ring_buffer_.size() - kReferencePlaybackDelaySamples" in source
+    assert '#include "esp_ae_rate_cvt.h"' not in header
+    assert "kReferenceRingCapacitySamples" not in source
+    assert "kReferencePlaybackDelaySamples" not in source
+    assert "esp_ae_rate_cvt_open" not in source
+    assert "esp_ae_rate_cvt_process" not in source
+    assert "reference_ring_buffer_" not in header
+    assert "AppendReferenceSamples" not in header
+    assert "PopReferenceSamples" not in header
+    assert "LogReferenceProbe" not in header
+    assert "duplex_ = true" in source
+    assert "input_reference_ = false" in source
+    assert "input_channels_ = 1" in source
+    assert "frames_requested = samples" in source
+    assert "std::copy(mic_data.begin(), mic_data.end(), dest)" in source
+    assert "dest[i * input_channels_ + 1]" not in source
+    assert "AppendReferenceSamples(data, samples_written)" not in source
     assert "ESP_LOGI(TAG, \"Audio processor input format: %s\", input_format.c_str())" in processor
+    assert "virtual bool HasHardwareAudioFrontend() { return false; }" in board_header
+    assert "virtual bool HasHardwareAudioFrontend() override" in board
+    assert "return true;" in board[board.index("HasHardwareAudioFrontend"):]
+    assert "Board::GetInstance().HasHardwareAudioFrontend()" in processor
+    assert "hardware_audio_frontend" in processor
+    assert "afe_config->ns_init = false" in processor
 
 
-def test_voice_pe_uses_hardware_verified_ns_mic_channel_for_wake_and_voice():
+def test_voice_pe_uses_official_xmos_channels_for_wake_and_voice():
     audio_codec_header = read("main/audio/audio_codec.h")
     service_source = read("main/audio/audio_service.cc")
     voice_pe_header = read("main/boards/home-assistant-voice-pe/voice_pe_audio_codec.h")
@@ -346,7 +344,7 @@ def test_voice_pe_uses_hardware_verified_ns_mic_channel_for_wake_and_voice():
     assert "virtual void SetInputPurpose(AudioInputPurpose purpose)" in audio_codec_header
     assert "SetInputPurpose(AudioInputPurpose purpose) override" in voice_pe_header
     assert "kWakeWordMicSlot = 1" in voice_pe_source
-    assert "kVoiceMicSlot = 1" in voice_pe_source
+    assert "kVoiceMicSlot = 0" in voice_pe_source
     assert "selected_mic_slot_" in voice_pe_source
     assert "selected_mic_slot_ = kWakeWordMicSlot" in voice_pe_source
     assert "selected_mic_slot_ = kVoiceMicSlot" in voice_pe_source
@@ -410,7 +408,7 @@ def test_voice_pe_waits_for_active_playback_before_listening_again():
         service_source.index("playback_active_ = false") :
     ]
     assert "audio_decode_queue_.empty() && !decode_active_ && audio_playback_queue_.empty() && !playback_active_" in service_source
-    assert "codec_->input_reference()" in service_source
+    assert "Board::GetInstance().ShouldUploadAudioDuringSpeaking()" in service_source
     assert "IsDecodePacketIdleLocked() && !IsPlaybackTailGuardActiveLocked()" in service_source
     assert "kDecodePacketIdleGuardMs - static_cast<int>(decode_elapsed_ms)" in service_source
     assert "kPlaybackTailGuardMs - static_cast<int>(output_elapsed_ms)" in service_source
@@ -644,7 +642,8 @@ def test_voice_pe_realtime_voice_processor_does_not_block_afe_fetch_on_encode_ba
     ]
 
     assert "void PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm, bool wait = true)" in service_header
-    assert "PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data), !codec_->input_reference())" in processor_callback
+    assert "bool wait_for_encode_queue = !codec_->input_reference() && Board::GetInstance().ShouldUploadAudioDuringSpeaking()" in processor_callback
+    assert "PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data), wait_for_encode_queue)" in processor_callback
     assert "if (!wait && audio_encode_queue_.size() >= MAX_ENCODE_TASKS_IN_QUEUE)" in push_method
     assert "audio_encode_queue_.pop_front()" in push_method
     assert "if (wait) {" in push_method

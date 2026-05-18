@@ -283,6 +283,10 @@ public:
     virtual bool ShouldUploadAudioDuringSpeaking() override {
         return false;
     }
+
+    virtual bool HasHardwareAudioFrontend() override {
+        return true;
+    }
 };
 
 DECLARE_BOARD(HomeAssistantVoicePeBoard);
