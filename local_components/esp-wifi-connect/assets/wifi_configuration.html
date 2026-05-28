@@ -1417,6 +1417,26 @@
 
         // ========== Form Submission ==========
 
+        async function parseJsonResponse(response, fallbackMessage) {
+            const contentType = response.headers.get('content-type') || '';
+            if (contentType.includes('application/json')) {
+                return await response.json();
+            }
+
+            const message = await response.text();
+            throw new Error(message || fallbackMessage);
+        }
+
+        function readNumberField(id, min, max, label) {
+            const input = document.getElementById(id);
+            const rawValue = input.value.trim();
+            const value = Number(rawValue);
+            if (rawValue === '' || !Number.isFinite(value) || !Number.isInteger(value) || value < min || value > max) {
+                throw new Error(`${label} must be between ${min} and ${max}`);
+            }
+            return value;
+        }
+
         /**
          * Submit Wi-Fi connection form
          */
@@ -1443,7 +1463,7 @@
                     body: JSON.stringify(payload)
                 });
 
-                const data = await response.json();
+                const data = await parseJsonResponse(response, 'Connection failed');
                 if (!data.success) {
                     throw new Error(data.error || 'Connection failed');
                 }
@@ -1469,31 +1489,31 @@
             advancedButton.disabled = true;
             advancedError.textContent = '';
 
-            const config = {
-                ota_url: document.getElementById('ota_url').value,
-                max_tx_power: parseInt(document.getElementById('max_tx_power').value),
-                remember_bssid: document.getElementById('remember_bssid').checked,
-                sleep_mode: document.getElementById('sleep_mode').checked,
-                auto_firmware_upgrade: document.getElementById('auto_firmware_upgrade').checked,
-                wake_arbitration_enabled: document.getElementById('wake_arbitration_enabled').checked,
-                wake_arbitration_gateway_url: document.getElementById('wake_arbitration_gateway_url').value.trim(),
-                ha_mqtt_enabled: document.getElementById('ha_mqtt_enabled').checked,
-                ha_mqtt_host: document.getElementById('ha_mqtt_host').value,
-                ha_mqtt_port: parseInt(document.getElementById('ha_mqtt_port').value),
-                ha_mqtt_username: document.getElementById('ha_mqtt_username').value,
-                ha_mqtt_password: document.getElementById('ha_mqtt_password').value,
-                ha_mqtt_client_id: document.getElementById('ha_mqtt_client_id').value,
-                ha_mqtt_device_name: document.getElementById('ha_mqtt_device_name').value,
-                ha_playback: {
-                    tts_output: document.getElementById('tts_output').value,
-                    media_player_entity_id: document.getElementById('ha_media_player_entity_id').value.trim(),
-                    timeout_ms: parseInt(document.getElementById('ha_playback_timeout_ms').value),
-                    restore_listening: document.getElementById('restore_listening_after_playback').checked,
-                    local_volume_when_ha_output: parseInt(document.getElementById('local_volume_when_ha_output').value)
-                }
-            };
-
             try {
+                const config = {
+                    ota_url: document.getElementById('ota_url').value,
+                    max_tx_power: parseInt(document.getElementById('max_tx_power').value),
+                    remember_bssid: document.getElementById('remember_bssid').checked,
+                    sleep_mode: document.getElementById('sleep_mode').checked,
+                    auto_firmware_upgrade: document.getElementById('auto_firmware_upgrade').checked,
+                    wake_arbitration_enabled: document.getElementById('wake_arbitration_enabled').checked,
+                    wake_arbitration_gateway_url: document.getElementById('wake_arbitration_gateway_url').value.trim(),
+                    ha_mqtt_enabled: document.getElementById('ha_mqtt_enabled').checked,
+                    ha_mqtt_host: document.getElementById('ha_mqtt_host').value,
+                    ha_mqtt_port: parseInt(document.getElementById('ha_mqtt_port').value),
+                    ha_mqtt_username: document.getElementById('ha_mqtt_username').value,
+                    ha_mqtt_password: document.getElementById('ha_mqtt_password').value,
+                    ha_mqtt_client_id: document.getElementById('ha_mqtt_client_id').value,
+                    ha_mqtt_device_name: document.getElementById('ha_mqtt_device_name').value,
+                    ha_playback: {
+                        tts_output: document.getElementById('tts_output').value,
+                        media_player_entity_id: document.getElementById('ha_media_player_entity_id').value.trim(),
+                        timeout_ms: readNumberField('ha_playback_timeout_ms', 10000, 120000, 'HA playback timeout'),
+                        restore_listening: document.getElementById('restore_listening_after_playback').checked,
+                        local_volume_when_ha_output: readNumberField('local_volume_when_ha_output', 0, 100, 'Local volume during HA playback')
+                    }
+                };
+
                 const response = await fetch('/advanced/submit', {
                     method: 'POST',
                     headers: {
@@ -1502,7 +1522,7 @@
                     body: JSON.stringify(config)
                 });
 
-                const data = await response.json();
+                const data = await parseJsonResponse(response, 'Save failed');
                 if (!data.success) {
                     throw new Error(data.error || 'Save failed');
                 }

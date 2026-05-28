@@ -233,12 +233,14 @@ private:
     std::chrono::steady_clock::time_point last_output_time_;
     std::chrono::steady_clock::time_point last_decode_packet_time_;
     std::chrono::steady_clock::time_point playback_buffer_started_at_;
+    int64_t last_wake_word_input_probe_us_ = 0;
 
     void AudioInputTask();
     void AudioOutputTask();
     void OpusCodecTask();
     void PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm, bool wait = true);
     void LogVoicePipelineProbe();
+    void LogWakeWordInputProbe();
     bool IsPlaybackTailGuardActiveLocked() const;
     bool IsDecodePacketIdleLocked() const;
     void SetDecodeSampleRate(int sample_rate, int frame_duration);

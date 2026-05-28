@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -100,6 +101,40 @@ def test_wifi_config_ui_contains_ha_playback_controls():
     assert "document.getElementById('ha_media_player_entity_id').value.trim()" in html
     assert "data.ha_playback" in html
     assert "uses the configured gateway URL" in html or "复用当前 gateway" in html
+
+
+def test_wifi_config_ui_validates_ha_playback_numbers_before_submit():
+    html = read("local_components/esp-wifi-connect/assets/wifi_configuration.html")
+
+    assert "function readNumberField" in html
+    assert "Number.isFinite(value)" in html
+    assert "readNumberField('ha_playback_timeout_ms', 10000, 120000" in html
+    assert "readNumberField('local_volume_when_ha_output', 0, 100" in html
+    assert "await parseJsonResponse(response, 'Save failed')" in html
+
+
+def test_wifi_config_backend_reports_ha_playback_field_errors():
+    source = read("local_components/esp-wifi-connect/wifi_configuration_ap.cc")
+
+    assert "ValidateHaPlaybackSettings" in source
+    assert '"Invalid HA playback tts_output"' in source
+    assert '"Invalid HA playback media_player_entity_id"' in source
+    assert '"Invalid HA playback timeout_ms"' in source
+    assert '"Invalid HA playback restore_listening"' in source
+    assert '"Invalid HA playback local_volume_when_ha_output"' in source
+
+
+def test_wifi_config_ha_playback_nvs_keys_fit_esp_idf_limit():
+    source = read("local_components/esp-wifi-connect/wifi_configuration_ap.cc")
+
+    keys = re.findall(r'constexpr const char\* kHaPlayback\w+Key = "([^"]+)"', source)
+    assert keys
+    assert all(len(key) <= 15 for key in keys)
+    assert 'kHaPlaybackMediaPlayerKey = "media_player"' in source
+    assert 'kHaPlaybackLocalVolumeKey = "local_volume"' in source
+    assert "nvs_set_str(nvs, kHaPlaybackMediaPlayerKey" in source
+    assert "nvs_set_i32(nvs, kHaPlaybackLocalVolumeKey" in source
+    assert "esp_err_to_name(err)" in source
 
 
 def test_ha_playback_client_files_are_registered():

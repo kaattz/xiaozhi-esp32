@@ -29,6 +29,11 @@ constexpr const char* kWakeArbitrationEnabledKey = "wake_arb";
 constexpr const char* kWakeArbitrationGatewayUrlKey = "wake_arb_url";
 constexpr const char* kHaMqttNamespace = "ha_mqtt";
 constexpr const char* kHaPlaybackNamespace = "ha_playback";
+constexpr const char* kHaPlaybackTtsOutputKey = "tts_output";
+constexpr const char* kHaPlaybackMediaPlayerKey = "media_player";
+constexpr const char* kHaPlaybackTimeoutKey = "timeout_ms";
+constexpr const char* kHaPlaybackRestoreKey = "restore";
+constexpr const char* kHaPlaybackLocalVolumeKey = "local_volume";
 
 std::string ReadNvsString(nvs_handle_t nvs, const char* key, const char* default_value = "") {
     size_t size = 0;
@@ -61,6 +66,88 @@ std::string TrimCopy(const char* value) {
         result.pop_back();
     }
     return result;
+}
+
+esp_err_t SendJsonError(httpd_req_t* req, const char* status, const char* error) {
+    httpd_resp_set_status(req, status);
+    httpd_resp_set_type(req, "application/json");
+
+    cJSON* json = cJSON_CreateObject();
+    if (json == nullptr) {
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Internal server error\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    cJSON_AddBoolToObject(json, "success", false);
+    cJSON_AddStringToObject(json, "error", error);
+    char* json_str = cJSON_PrintUnformatted(json);
+    if (json_str == nullptr) {
+        cJSON_Delete(json);
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Internal server error\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    httpd_resp_send(req, json_str, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(json_str);
+    cJSON_Delete(json);
+    return ESP_FAIL;
+}
+
+const char* ValidateHaPlaybackSettings(const cJSON* json) {
+    const auto* ha_playback = cJSON_GetObjectItem(json, "ha_playback");
+    if (ha_playback == nullptr) {
+        return nullptr;
+    }
+    if (!cJSON_IsObject(ha_playback)) {
+        return "Invalid HA playback configuration";
+    }
+
+    const auto* tts_output_item = cJSON_GetObjectItem(ha_playback, "tts_output");
+    if (!IsStringItemValid(tts_output_item, 32)) {
+        return "Invalid HA playback tts_output";
+    }
+
+    const auto* media_player_item = cJSON_GetObjectItem(ha_playback, "media_player_entity_id");
+    if (!IsStringItemValid(media_player_item, 128)) {
+        return "Invalid HA playback media_player_entity_id";
+    }
+
+    const auto* timeout_item = cJSON_GetObjectItem(ha_playback, "timeout_ms");
+    if (!cJSON_IsNumber(timeout_item)) {
+        return "Invalid HA playback timeout_ms";
+    }
+
+    const auto* restore_item = cJSON_GetObjectItem(ha_playback, "restore_listening");
+    if (!cJSON_IsBool(restore_item)) {
+        return "Invalid HA playback restore_listening";
+    }
+
+    const auto* local_volume_item = cJSON_GetObjectItem(ha_playback, "local_volume_when_ha_output");
+    if (!cJSON_IsNumber(local_volume_item)) {
+        return "Invalid HA playback local_volume_when_ha_output";
+    }
+
+    const std::string tts_output = tts_output_item->valuestring;
+    if (!(tts_output == "local" || tts_output == "ha_media_player")) {
+        return "Invalid HA playback tts_output";
+    }
+
+    const std::string media_player_entity_id = TrimCopy(media_player_item->valuestring);
+    if (tts_output == "ha_media_player" && media_player_entity_id.empty()) {
+        return "Invalid HA playback media_player_entity_id";
+    }
+
+    const int32_t timeout_ms = timeout_item->valueint;
+    if (timeout_ms < 10000 || timeout_ms > 120000) {
+        return "Invalid HA playback timeout_ms";
+    }
+
+    const int32_t local_volume = local_volume_item->valueint;
+    if (local_volume < 0 || local_volume > 100) {
+        return "Invalid HA playback local_volume_when_ha_output";
+    }
+
+    return nullptr;
 }
 }
 
@@ -799,11 +886,21 @@ void WifiConfigurationAp::StartWebServer()
                 return ESP_FAIL;
             }
 
+            const char* ha_playback_error = ValidateHaPlaybackSettings(json);
+            if (ha_playback_error != nullptr) {
+                nvs_close(nvs);
+                cJSON_Delete(json);
+                SendJsonError(req, "400 Bad Request", ha_playback_error);
+                return ESP_FAIL;
+            }
+
             err = this_->SaveHaPlaybackSettings(json);
             if (err != ESP_OK) {
                 nvs_close(nvs);
                 cJSON_Delete(json);
-                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid HA playback configuration");
+                std::string message = "Failed to save HA playback configuration: ";
+                message += esp_err_to_name(err);
+                SendJsonError(req, "500 Internal Server Error", message.c_str());
                 return ESP_FAIL;
             }
 
@@ -883,21 +980,21 @@ void WifiConfigurationAp::LoadHaPlaybackSettings()
         return;
     }
 
-    ha_playback_tts_output_ = ReadNvsString(nvs, "tts_output", "local");
-    ha_playback_media_player_entity_id_ = ReadNvsString(nvs, "media_player_entity_id");
+    ha_playback_tts_output_ = ReadNvsString(nvs, kHaPlaybackTtsOutputKey, "local");
+    ha_playback_media_player_entity_id_ = ReadNvsString(nvs, kHaPlaybackMediaPlayerKey);
 
     int32_t timeout_ms = 60000;
-    if (nvs_get_i32(nvs, "timeout_ms", &timeout_ms) == ESP_OK) {
+    if (nvs_get_i32(nvs, kHaPlaybackTimeoutKey, &timeout_ms) == ESP_OK) {
         ha_playback_timeout_ms_ = timeout_ms;
     }
 
     uint8_t restore_listening = 1;
-    if (nvs_get_u8(nvs, "restore_listening", &restore_listening) == ESP_OK) {
+    if (nvs_get_u8(nvs, kHaPlaybackRestoreKey, &restore_listening) == ESP_OK) {
         ha_playback_restore_listening_ = restore_listening != 0;
     }
 
     int32_t local_volume = 0;
-    if (nvs_get_i32(nvs, "local_volume_when_ha_output", &local_volume) == ESP_OK) {
+    if (nvs_get_i32(nvs, kHaPlaybackLocalVolumeKey, &local_volume) == ESP_OK) {
         ha_playback_local_volume_when_ha_output_ = local_volume;
     }
 
@@ -962,12 +1059,13 @@ esp_err_t WifiConfigurationAp::SaveHaMqttSettings(const cJSON* json)
 
 esp_err_t WifiConfigurationAp::SaveHaPlaybackSettings(const cJSON* json)
 {
+    if (ValidateHaPlaybackSettings(json) != nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
     const auto* ha_playback = cJSON_GetObjectItem(json, "ha_playback");
     if (ha_playback == nullptr) {
         return ESP_OK;
-    }
-    if (!cJSON_IsObject(ha_playback)) {
-        return ESP_ERR_INVALID_ARG;
     }
 
     const auto* tts_output_item = cJSON_GetObjectItem(ha_playback, "tts_output");
@@ -976,33 +1074,10 @@ esp_err_t WifiConfigurationAp::SaveHaPlaybackSettings(const cJSON* json)
     const auto* restore_item = cJSON_GetObjectItem(ha_playback, "restore_listening");
     const auto* local_volume_item = cJSON_GetObjectItem(ha_playback, "local_volume_when_ha_output");
 
-    if (!IsStringItemValid(tts_output_item, 32) ||
-        !IsStringItemValid(media_player_item, 128) ||
-        !cJSON_IsNumber(timeout_item) ||
-        !cJSON_IsBool(restore_item) ||
-        !cJSON_IsNumber(local_volume_item)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
     const std::string tts_output = tts_output_item->valuestring;
-    if (!(tts_output == "local" || tts_output == "ha_media_player")) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
     const std::string media_player_entity_id = TrimCopy(media_player_item->valuestring);
-    if (tts_output == "ha_media_player" && media_player_entity_id.empty()) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
     const int32_t timeout_ms = timeout_item->valueint;
-    if (timeout_ms < 10000 || timeout_ms > 120000) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
     const int32_t local_volume = local_volume_item->valueint;
-    if (local_volume < 0 || local_volume > 100) {
-        return ESP_ERR_INVALID_ARG;
-    }
 
     nvs_handle_t nvs;
     esp_err_t err = nvs_open(kHaPlaybackNamespace, NVS_READWRITE, &nvs);
@@ -1016,11 +1091,11 @@ esp_err_t WifiConfigurationAp::SaveHaPlaybackSettings(const cJSON* json)
     ha_playback_restore_listening_ = cJSON_IsTrue(restore_item);
     ha_playback_local_volume_when_ha_output_ = local_volume;
 
-    err = nvs_set_str(nvs, "tts_output", ha_playback_tts_output_.c_str());
-    if (err == ESP_OK) err = nvs_set_str(nvs, "media_player_entity_id", ha_playback_media_player_entity_id_.c_str());
-    if (err == ESP_OK) err = nvs_set_i32(nvs, "timeout_ms", ha_playback_timeout_ms_);
-    if (err == ESP_OK) err = nvs_set_u8(nvs, "restore_listening", ha_playback_restore_listening_ ? 1 : 0);
-    if (err == ESP_OK) err = nvs_set_i32(nvs, "local_volume_when_ha_output", ha_playback_local_volume_when_ha_output_);
+    err = nvs_set_str(nvs, kHaPlaybackTtsOutputKey, ha_playback_tts_output_.c_str());
+    if (err == ESP_OK) err = nvs_set_str(nvs, kHaPlaybackMediaPlayerKey, ha_playback_media_player_entity_id_.c_str());
+    if (err == ESP_OK) err = nvs_set_i32(nvs, kHaPlaybackTimeoutKey, ha_playback_timeout_ms_);
+    if (err == ESP_OK) err = nvs_set_u8(nvs, kHaPlaybackRestoreKey, ha_playback_restore_listening_ ? 1 : 0);
+    if (err == ESP_OK) err = nvs_set_i32(nvs, kHaPlaybackLocalVolumeKey, ha_playback_local_volume_when_ha_output_);
     if (err == ESP_OK) err = nvs_commit(nvs);
 
     nvs_close(nvs);

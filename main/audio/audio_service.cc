@@ -44,6 +44,7 @@ namespace {
 constexpr int kPlaybackTailGuardMs = 200;
 constexpr int kDecodePacketIdleGuardMs = OPUS_FRAME_DURATION_MS * 2;
 constexpr int64_t kVoicePipelineProbeIntervalUs = 2000 * 1000;
+constexpr int64_t kWakeWordInputProbeIntervalUs = 2000 * 1000;
 
 float CalculateRms(const std::vector<int16_t>& data) {
     if (data.empty()) {
@@ -325,6 +326,7 @@ void AudioService::AudioInputTask() {
             if (ReadAudioData(data, 16000, samples)) {
                 debug_statistics_.raw_input_rms = CalculateMicRms(data, codec_->input_channels());
                 if (bits & AS_EVENT_WAKE_WORD_RUNNING) {
+                    LogWakeWordInputProbe();
                     wake_word_->Feed(data);
                 }
                 if (bits & AS_EVENT_AUDIO_PROCESSOR_RUNNING) {
@@ -1028,6 +1030,21 @@ void AudioService::LogVoicePipelineProbe() {
         static_cast<unsigned>(send_queue_size),
         static_cast<unsigned>(encode_queue_size));
     last_voice_pipeline_probe_us_ = now_us;
+}
+
+void AudioService::LogWakeWordInputProbe() {
+#if CONFIG_BOARD_TYPE_ESP_BOX_3
+    const int64_t now_us = esp_timer_get_time();
+    if (now_us - last_wake_word_input_probe_us_ < kWakeWordInputProbeIntervalUs) {
+        return;
+    }
+
+    ESP_LOGD(TAG, "wake input probe: input=%u raw_rms=%.1f channels=%d",
+        debug_statistics_.input_count,
+        debug_statistics_.raw_input_rms,
+        codec_->input_channels());
+    last_wake_word_input_probe_us_ = now_us;
+#endif
 }
 
 void AudioService::ResetDecoder() {
